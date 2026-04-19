@@ -11,10 +11,16 @@
 //   chrome.storage.sync.set({ backendUrl: "wss://your-app.railway.app" })
 // ============================================================
 
-// ── Set this to your deployed backend URL after deploying ──
-// Example: "wss://meetsense-ai.railway.app"
-// Leave as empty string to use localhost during development.
-const DEPLOYMENT_WS_URL = "https://hackcera.onrender.com";
+// ── Switch between LOCAL dev and PRODUCTION ─────────────────
+//
+//  LOCAL DEV  (uses ws://localhost:3001):
+//    const DEPLOYMENT_WS_URL = "";
+//
+//  PRODUCTION (uses the Render.com backend):
+//    const DEPLOYMENT_WS_URL = "https://hackcera.onrender.com";
+//
+// ⬇ Change this one line to switch environments ⬇
+const DEPLOYMENT_WS_URL = "";   // ← empty = localhost (dev mode)
 
 const LOCAL_WS_URL = "ws://localhost:3001";
 

@@ -37,19 +37,17 @@ class DeepgramManager {
 
     const deepgram = createClient(DEEPGRAM_API_KEY);
 
-    // BUG FIX: encoding must be "opus" not "webm_opus".
-    // Deepgram's streaming API rejects "webm_opus" and immediately closes
-    // the connection — causing the infinite reconnect loop in the logs.
-    // BUG FIX: Use nova-2 (stable streaming) instead of nova-3.
-    // nova-3 has stricter encoding/format requirements for live streaming.
+    // BUG FIX: Do NOT specify encoding, sample_rate, or channels for WebM/MediaRecorder streams!
+    // Our frontend uses MediaRecorder which emits "audio/webm" (a container format).
+    // Deepgram documentation explicitly states that for containerized audio, you MUST NOT
+    // specify the encoding parameters; Deepgram auto-detects it from the WebM header.
+    // Specifying encoding="opus" forces Deepgram to read the WebM header as raw opus frames,
+    // which causes the audio engine to fail silently.
     this.live = deepgram.listen.live({
       model:           "nova-2",
       language:        "en-US",
       smart_format:    true,
       interim_results: true,
-      encoding:        "opus",        // ← was "webm_opus" which is INVALID
-      sample_rate:     48000,
-      channels:        1,
       endpointing:     300,           // ms of silence = end of utterance
     });
 
