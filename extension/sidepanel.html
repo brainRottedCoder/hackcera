@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MeetSense AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">🧠</span>
+        <span class="logo-text">MeetSense<span class="logo-accent"> AI</span></span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="ws-indicator" class="ws-badge disconnected">
+        <span class="ws-dot"></span>
+        <span id="ws-label">Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Captions Missing Banner ── -->
+  <div id="captions-banner" class="alert-banner hidden">
+    ⚠️ Enable captions in Google Meet to activate MeetSense AI
+  </div>
+
+  <!-- ── Live Transcript ── -->
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">📝 Live Transcript</h2>
+      <span id="transcript-count" class="badge">0 lines</span>
+    </div>
+    <div id="transcript-feed" class="transcript-box">
+      <p class="empty-state">Waiting for captions…</p>
+    </div>
+  </section>
+
+  <!-- ── AI Insights Tabs ── -->
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">⚡ AI Insights</h2>
+      <div id="processing-dot" class="processing-dot hidden" title="AI processing…"></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="tasks">✅ Tasks</button>
+      <button class="tab-btn" data-tab="decisions">🟡 Decisions</button>
+      <button class="tab-btn" data-tab="risks">🔴 Risks</button>
+    </div>
+
+    <!-- Task Panel -->
+    <div id="tab-tasks" class="tab-content active">
+      <table class="task-table">
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Owner</th>
+            <th>Deadline</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="task-tbody">
+          <tr class="empty-row">
+            <td colspan="4">No tasks extracted yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Decisions Panel -->
+    <div id="tab-decisions" class="tab-content hidden">
+      <ul id="decisions-list" class="insight-list">
+        <li class="empty-state">No decisions captured yet.</li>
+      </ul>
+    </div>
+
+    <!-- Risks Panel -->
+    <div id="tab-risks" class="tab-content hidden">
+      <ul id="risks-list" class="insight-list risk-list">
+        <li class="empty-state">No risks flagged yet.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ── Manual Summary Button ── -->
+  <section class="section summary-section">
+    <div class="section-header">
+      <h2 class="section-title">📋 Meeting Summary</h2>
+    </div>
+    <p class="summary-hint">Click to generate a full AI summary of the meeting so far.</p>
+    <button id="btn-summary" class="btn-primary">
+      <span id="btn-summary-icon">✨</span>
+      <span id="btn-summary-label">Generate Summary</span>
+    </button>
+
+    <!-- Summary Output -->
+    <div id="summary-output" class="summary-output hidden">
+      <div class="summary-card">
+        <h3>📄 Summary</h3>
+        <p id="summary-text"></p>
+      </div>
+      <div class="summary-card">
+        <h3>✅ All Tasks</h3>
+        <ul id="summary-tasks"></ul>
+      </div>
+      <div class="summary-card">
+        <h3>🟡 All Decisions</h3>
+        <ul id="summary-decisions"></ul>
+      </div>
+      <div class="summary-card">
+        <h3>🔴 All Risks</h3>
+        <ul id="summary-risks"></ul>
+      </div>
+      <div class="summary-actions">
+        <button id="btn-copy" class="btn-secondary">📋 Copy JSON</button>
+        <button id="btn-clear" class="btn-ghost">🗑️ Clear Session</button>
+      </div>
+    </div>
+
+    <!-- Summary Error -->
+    <div id="summary-error" class="error-banner hidden"></div>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
