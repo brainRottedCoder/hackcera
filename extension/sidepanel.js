@@ -6,9 +6,10 @@
 // ============================================================
 
 // ── State ──
-let allTasks     = [];  // deduplicated accumulated task list
-let lastSummary  = null; // last generated summary for export
+let allTasks        = [];    // deduplicated accumulated task list
+let lastSummary     = null;  // last generated summary for export
 let transcriptCount = 0;
+let meetActive      = false; // track whether Meet tab is open
 
 // ── DOM refs ──
 const transcriptFeed   = document.getElementById("transcript-feed");
@@ -33,13 +34,22 @@ const btnClear         = document.getElementById("btn-clear");
 chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
 
+    case "MEET_STATUS":
+      updateMeetStatus(msg.active);
+      break;
+
     case "CAPTION_DISPLAY":
-      appendTranscript(msg.payload.text);
+      if (meetActive) appendTranscript(msg.payload.text);
       break;
 
     case "INSIGHTS_UPDATE":
       processingDot.classList.add("hidden");
       updateInsights(msg.payload);
+      break;
+
+    case "INSIGHTS_ERROR":
+      processingDot.classList.add("hidden");
+      showInsightsError(msg.message || "AI processing failed.");
       break;
 
     case "PROCESSING_INDICATOR":
@@ -57,7 +67,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
     case "SUMMARY_ERROR":
       setSummaryLoading(false);
-      showSummaryError(msg.message);
+      showSummaryError(msg.message || "Unknown error occurred.");
       break;
 
     case "CAPTIONS_MISSING":
@@ -73,6 +83,9 @@ chrome.runtime.onMessage.addListener((msg) => {
       break;
   }
 });
+
+// Ask background for current status as soon as panel opens
+chrome.runtime.sendMessage({ type: "GET_MEET_STATUS" });
 
 // ──────────────────────────────────────────
 // 2. Live Transcript
@@ -255,7 +268,57 @@ btnClear.addEventListener("click", () => {
 });
 
 // ──────────────────────────────────────────
-// 7. WebSocket Status Badge
+// 7. Meet Active / Inactive Status
+// ──────────────────────────────────────────
+function updateMeetStatus(active) {
+  meetActive = active;
+
+  let overlay = document.getElementById("meet-inactive-overlay");
+
+  if (!active) {
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "meet-inactive-overlay";
+      overlay.className = "meet-inactive-overlay";
+      overlay.innerHTML = `
+        <div class="meet-inactive-card">
+          <div class="meet-inactive-icon">🎥</div>
+          <h3>No Active Meet Session</h3>
+          <p>Open <strong>Google Meet</strong> in this Chrome window and join a call to activate MeetSense AI.</p>
+          <a href="https://meet.google.com/new" target="_blank" class="btn-primary" style="text-decoration:none;display:inline-block;margin-top:12px">
+            ✨ Start a Meet
+          </a>
+        </div>`;
+      document.body.appendChild(overlay);
+    }
+    overlay.classList.remove("hidden");
+    btnSummary.disabled = true;
+    updateWSBadge("disconnected");
+  } else {
+    if (overlay) overlay.classList.add("hidden");
+    btnSummary.disabled = false;
+  }
+}
+
+let insightsErrorTimer = null;
+
+function showInsightsError(message) {
+  let banner = document.getElementById("insights-error-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "insights-error-banner";
+    banner.className = "error-banner";
+    const section = document.querySelector(".section:nth-child(3)");
+    if (section) section.insertBefore(banner, section.firstChild.nextSibling);
+  }
+  banner.textContent = `⚠️ ${message}`;
+  banner.classList.remove("hidden");
+  clearTimeout(insightsErrorTimer);
+  insightsErrorTimer = setTimeout(() => banner.classList.add("hidden"), 10000);
+}
+
+// ──────────────────────────────────────────
+// 8. WebSocket Status Badge
 // ──────────────────────────────────────────
 function updateWSBadge(status) {
   wsBadge.className = `ws-badge ${status}`;

@@ -30,9 +30,10 @@ wss.on("connection", (ws) => {
   ws.on("message", async (raw) => {
     let msg;
     try {
-      msg = JSON.parse(raw);
+      const str = typeof raw === "string" ? raw : raw.toString();
+      msg = JSON.parse(str);
     } catch {
-      return; // ignore malformed
+      return;
     }
 
     // ── PING keepalive ──
@@ -45,7 +46,7 @@ wss.on("connection", (ws) => {
     if (msg.type === "PROCESS_CHUNK") {
       const { text } = msg;
 
-      if (!text || text.trim().length < 20) return; // skip silence
+      if (!text || text.trim().length < 20) return;
 
       ctx.addChunk(text);
 
@@ -55,7 +56,17 @@ wss.on("connection", (ws) => {
         ctx.getAllDecisions()
       );
 
-      const result = await callGeminiInsights(prompt);
+      let result;
+      try {
+        result = await callGeminiInsights(prompt);
+      } catch (err) {
+        console.error("[Backend] LLM call threw:", err.message);
+        ws.send(JSON.stringify({
+          type: "INSIGHTS_ERROR",
+          message: "AI processing failed. Please check your API key and quota."
+        }));
+        return;
+      }
 
       if (result) {
         ctx.mergeFromLLM(result);
@@ -64,14 +75,25 @@ wss.on("connection", (ws) => {
           type: "INSIGHTS_UPDATE",
           payload: result
         }));
+      } else {
+        ws.send(JSON.stringify({
+          type: "INSIGHTS_ERROR",
+          message: "AI returned no result. API quota may be exhausted — check your Gemini API key."
+        }));
       }
     }
 
     // ── TRACK C: Manual full-meeting summary ──
     if (msg.type === "GENERATE_SUMMARY") {
+      console.log("\n[Summary] ═══════════════ SUMMARY REQUEST START ═══════════════");
+
       const { fullTranscript } = msg;
 
+      // ── Step 1: validate transcript ──
+      console.log(`[Summary] Step 1 — Transcript received. Length: ${fullTranscript?.length ?? 0} chars`);
+
       if (!fullTranscript || fullTranscript.trim().length < 50) {
+        console.warn("[Summary] ❌ Transcript too short to summarize. Sending SUMMARY_ERROR.");
         ws.send(JSON.stringify({
           type: "SUMMARY_ERROR",
           message: "Transcript too short to summarize."
@@ -79,25 +101,60 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      const prompt = buildSummaryPrompt(
-        fullTranscript,
-        ctx.getAllTasks(),
-        ctx.getAllDecisions()
-      );
+      // ── Step 2: build prompt ──
+      const accTasks     = ctx.getAllTasks();
+      const accDecisions = ctx.getAllDecisions();
+      console.log(`[Summary] Step 2 — Context: ${accTasks.length} accumulated tasks, ${accDecisions.length} decisions`);
 
-      const result = await callGeminiSummary(prompt);
-
-      if (result) {
-        ws.send(JSON.stringify({
-          type: "SUMMARY_RESULT",
-          payload: result
-        }));
-      } else {
+      let prompt;
+      try {
+        prompt = buildSummaryPrompt(fullTranscript, accTasks, accDecisions);
+        console.log(`[Summary] Step 3 — Prompt built. Length: ${prompt.length} chars`);
+        console.log(`[Summary] Prompt preview (first 300 chars):\n${prompt.slice(0, 300)}`);
+      } catch (promptErr) {
+        console.error("[Summary] ❌ buildSummaryPrompt threw an error:", promptErr);
         ws.send(JSON.stringify({
           type: "SUMMARY_ERROR",
-          message: "AI summary generation failed. Please try again."
+          message: `Prompt build failed: ${promptErr.message}`
+        }));
+        return;
+      }
+
+      // ── Step 4: call Gemini ──
+      console.log("[Summary] Step 4 — Calling callGeminiSummary()...");
+      let result;
+      try {
+        result = await callGeminiSummary(prompt);
+      } catch (llmErr) {
+        console.error("[Summary] ❌ callGeminiSummary threw an unexpected error:");
+        console.error("[Summary]   Name   :", llmErr.name);
+        console.error("[Summary]   Message:", llmErr.message);
+        console.error("[Summary]   Stack  :", llmErr.stack);
+        ws.send(JSON.stringify({
+          type: "SUMMARY_ERROR",
+          message: `LLM call crashed: ${llmErr.message}`
+        }));
+        return;
+      }
+
+      // ── Step 5: handle result ──
+      if (result) {
+        console.log("[Summary] ✅ Step 5 — Result received:");
+        console.log(`[Summary]   summary   : ${result.summary?.slice(0, 100)}`);
+        console.log(`[Summary]   tasks     : ${result.tasks?.length ?? 0}`);
+        console.log(`[Summary]   decisions : ${result.decisions?.length ?? 0}`);
+        console.log(`[Summary]   risks     : ${result.risks?.length ?? 0}`);
+        ws.send(JSON.stringify({ type: "SUMMARY_RESULT", payload: result }));
+      } else {
+        console.error("[Summary] ❌ Step 5 — callGeminiSummary returned null (all models failed).");
+        console.error("[Summary]   Check logs above for [LLM] ❌ lines to see the specific API error.");
+        ws.send(JSON.stringify({
+          type: "SUMMARY_ERROR",
+          message: "AI summary generation failed. Check server console for details."
         }));
       }
+
+      console.log("[Summary] ═══════════════ SUMMARY REQUEST END ═══════════════\n");
     }
   });
 

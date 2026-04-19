@@ -1,0 +1,508 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+The content has been processed where security check has been disabled.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Security check has been disabled - content may contain sensitive information
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+backend/
+  app.py
+chrome-ext/
+  background.js
+  content.js
+  logo.png
+  manifest.json
+  offscreen.html
+  offscreen.js
+  popup.html
+  popup.js
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="backend/app.py">
+
+</file>
+
+<file path="chrome-ext/background.js">
+// background.js (service worker)
+chrome.runtime.onMessage.addListener(async (request, sender) => {
+  if (request.command === 'start') {
+    try {
+      // ensure there is an active Meet tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.url || !tab.url.includes('meet.google.com')) {
+        throw new Error('Please open Google Meet first');
+      }
+
+      // create offscreen doc if not present
+      const offscreenUrl = chrome.runtime.getURL('offscreen.html');
+      const exists = await chrome.offscreen.hasDocument?.();
+      if (!exists) {
+        await chrome.offscreen.createDocument({
+          url: offscreenUrl,
+          reasons: ['USER_MEDIA'],
+          justification: 'Record Google Meet audio for transcription'
+        });
+      }
+
+      // get media stream id for target tab
+      const streamId = await new Promise((resolve) =>
+        chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id }, resolve)
+      );
+
+      if (!streamId) throw new Error('Could not get stream id');
+
+      // tell offscreen to start capturing (send streamId + server url)
+      await chrome.runtime.sendMessage({ command: 'offscreen_start', streamId, serverUrl: request.serverUrl || 'http://localhost:8000/transcribe' });
+
+      // notify popup UI
+      chrome.runtime.sendMessage({ command: 'recording_started' });
+
+    } catch (err) {
+      console.error('background start error', err);
+      chrome.runtime.sendMessage({ command: 'error', message: err.message });
+    }
+  } else if (request.command === 'stop') {
+    try {
+      // tell offscreen to stop and then close offscreen doc
+      await chrome.runtime.sendMessage({ command: 'offscreen_stop' });
+      // give it a moment to finish, then close
+      setTimeout(async () => {
+        try { await chrome.offscreen.closeDocument(); } catch(e){ /* ignore */ }
+      }, 500);
+      chrome.runtime.sendMessage({ command: 'recording_stopped' });
+    } catch (err) {
+      console.error('background stop error', err);
+      chrome.runtime.sendMessage({ command: 'error', message: err.message });
+    }
+  }
+});
+</file>
+
+<file path="chrome-ext/content.js">
+// content.js
+console.log("Scribe-ai content script loaded for Google Meet");
+
+// Optional: Add visual indicators or Google Meet specific functionality
+// This script runs in the context of the Google Meet page
+</file>
+
+<file path="chrome-ext/manifest.json">
+{
+  "manifest_version": 3,
+  "name": "scribe-ai",
+  "version": "1.0",
+  "description": "AI-powered Google Meet summarizer - Records and uploads audio for transcription and summarization",
+  "icons": {
+    "16": "logo.png",
+    "48": "logo.png",
+    "128": "logo.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "logo.png",
+      "48": "logo.png",
+      "128": "logo.png"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabCapture",
+    "offscreen"
+  ],
+  "minimum_chrome_version": "109",
+  "host_permissions": [
+    "https://meet.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["recording-injected.js"],
+      "matches": ["https://meet.google.com/*"]
+    }
+  ]
+}
+</file>
+
+<file path="chrome-ext/offscreen.html">
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Offscreen Recorder</title>
+  </head>
+  <body>
+    <script src="offscreen.js"></script>
+  </body>
+</html>
+</file>
+
+<file path="chrome-ext/offscreen.js">
+// offscreen.js
+let mediaRecorder = null;
+let audioChunks = [];
+let currentStream = null;
+let serverUrl = 'http://localhost:8000/transcribe';
+
+async function startCapture(streamId, srvUrl) {
+  try {
+    serverUrl = srvUrl || serverUrl;
+
+    // Convert the streamId to a MediaStream using getUserMedia with mandatory chromeMediaSourceId
+    const constraints = {
+      audio: {
+        mandatory: {
+          chromeMediaSource: 'tab',
+          chromeMediaSourceId: streamId
+        }
+      },
+      video: false
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    if (!stream) throw new Error('Could not getMediaStream from streamId');
+
+    currentStream = stream;
+    audioChunks = [];
+
+    // create MediaRecorder (use audio/webm if supported)
+    const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/wav';
+    mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      try {
+        const blob = new Blob(audioChunks, { type: mime });
+        await uploadToServer(blob);
+      } catch (err) {
+        console.error('offscreen onstop upload error', err);
+        chrome.runtime.sendMessage({ command: 'upload_error', message: err.message });
+      } finally {
+        // stop tracks
+        if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+        currentStream = null;
+      }
+    };
+
+    mediaRecorder.start(1000); // chunk every second
+    chrome.runtime.sendMessage({ command: 'recording_started' });
+  } catch (err) {
+    console.error('offscreen startCapture error', err);
+    chrome.runtime.sendMessage({ command: 'error', message: err.message });
+  }
+}
+
+function stopCapture() {
+  try {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      chrome.runtime.sendMessage({ command: 'recording_stopped' });
+    }
+  } catch (err) {
+    console.error('offscreen stopCapture error', err);
+    chrome.runtime.sendMessage({ command: 'error', message: err.message });
+  }
+}
+
+async function uploadToServer(audioBlob) {
+  try {
+    chrome.runtime.sendMessage({ command: 'uploading' });
+
+    const fd = new FormData();
+    fd.append('audio', audioBlob, 'meeting.webm');
+
+    const r = await fetch(serverUrl, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(`Server returned ${r.status}`);
+    const json = await r.json();
+    chrome.runtime.sendMessage({ command: 'upload_success', data: json });
+  } catch (err) {
+    console.error('uploadToServer error', err);
+    chrome.runtime.sendMessage({ command: 'upload_error', message: err.message });
+  }
+}
+
+// listen for messages from service worker
+chrome.runtime.onMessage.addListener((request, sender) => {
+  if (request.command === 'offscreen_start') {
+    startCapture(request.streamId, request.serverUrl);
+  } else if (request.command === 'offscreen_stop') {
+    stopCapture();
+  }
+});
+</file>
+
+<file path="chrome-ext/popup.html">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Scribe-ai</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            width: 280px;
+            padding: 25px;
+            background-color: #FFFFFF;
+            font-family: 'Poppins', sans-serif;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border-radius: 16px;
+            overflow: hidden;
+            margin: 0;
+        }
+
+        h2 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1c1c1c;
+            margin: 0 0 20px 0;
+        }
+
+        .record-btn {
+            font-family: 'Poppins', sans-serif;
+            font-size: 16px;
+            font-weight: 600;
+            padding: 12px 24px;
+            margin-top: 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease-in-out;
+            width: 100%;
+            border: none;
+        }
+
+        .record-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.12);
+        }
+
+        #startBtn {
+            color: #FFFFFF;
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+        }
+
+        #stopBtn {
+            color: #FFFFFF;
+            background: linear-gradient(135deg, #f44336, #d32f2f);
+        }
+
+        #recordingTimer {
+            margin-top: 15px;
+            display: none;
+            padding: 10px;
+            background-color: #ffebee;
+            border-radius: 6px;
+            border-left: 3px solid #f44336;
+        }
+
+        #timerText {
+            font-size: 18px;
+            font-weight: 600;
+            color: #d32f2f;
+            font-family: monospace;
+        }
+
+        #status {
+            margin-top: 25px;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 10px 15px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+            min-height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status-ready {
+            color: #666666;
+            background-color: #f5f5f5;
+        }
+
+        .status-recording {
+            color: #d32f2f;
+            background-color: #ffebee;
+            animation: pulse 2s infinite;
+        }
+
+        .status-processing {
+            color: #ff9800;
+            background-color: #fff3e0;
+        }
+
+        .status-uploading {
+            color: #2196f3;
+            background-color: #e3f2fd;
+            animation: pulse 1.5s infinite;
+        }
+
+        .status-success {
+            color: #4caf50;
+            background-color: #e8f5e8;
+        }
+
+        .status-error {
+            color: #d32f2f;
+            background-color: #ffebee;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .server-info {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #999;
+            padding: 8px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            border-left: 3px solid #2196f3;
+        }
+    </style>
+</head>
+<body>
+    <h2>Scribe-ai</h2>
+    
+    <button id="startBtn" class="record-btn">🎙️ Start Recording</button>
+    <button id="stopBtn" class="record-btn" style="display: none;">⏹️ Stop Recording</button>
+    
+    <div id="recordingTimer">
+        <div id="timerText">00:00</div>
+    </div>
+    
+    <div id="status" class="status-ready">Ready to record</div>
+    
+    <div class="server-info">
+        📡 Audio will be uploaded to your server for AI processing
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
+</file>
+
+<file path="chrome-ext/popup.js">
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const status = document.getElementById('status');
+
+startBtn.onclick = () => {
+  chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+    if (!tabs[0].url.includes('meet.google.com')) {
+      status.textContent = '❌ Please open Google Meet first';
+      return;
+    }
+    chrome.runtime.sendMessage({ command: 'start' });
+  });
+};
+
+stopBtn.onclick = () => chrome.runtime.sendMessage({ command: 'stop' });
+
+chrome.runtime.onMessage.addListener((request) => {
+  switch (request.command) {
+    case 'recording_started':
+      startBtn.style.display = 'none';
+      stopBtn.style.display = 'block';
+      status.textContent = '🔴 Recording...';
+      break;
+    case 'recording_stopped':
+      startBtn.style.display = 'block';
+      stopBtn.style.display = 'none';
+      status.textContent = '📤 Processing...';
+      break;
+    case 'uploading':
+      status.textContent = '📤 Uploading to server...';
+      break;
+    case 'upload_success':
+      status.textContent = '✅ Success! Check server for results';
+      setTimeout(() => {
+        status.textContent = 'Ready to record';
+      }, 3000);
+      break;
+    case 'upload_error':
+      status.textContent = '❌ Upload failed: ' + request.message;
+      setTimeout(() => {
+        status.textContent = 'Ready to record';
+      }, 5000);
+      break;
+    case 'error':
+      startBtn.style.display = 'block';
+      stopBtn.style.display = 'none';
+      status.textContent = '❌ ' + request.message;
+      setTimeout(() => {
+        status.textContent = 'Ready to record';
+      }, 5000);
+      break;
+  }
+});
+</file>
+
+<file path="README.md">
+# scribe.ai
+</file>
+
+</files>
