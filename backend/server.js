@@ -7,6 +7,18 @@ const { buildInsightsPrompt, buildSummaryPrompt } = require("./promptBuilder");
 const ContextManager  = require("./contextManager");
 const DeepgramManager = require("./deepgramManager");
 
+// ── Global error guards ──────────────────────────────────────
+// Prevents a single async throw from crashing the whole server.
+// nodemon shows "app crashed" when an unhandled rejection reaches
+// the process — these handlers log it and keep the server alive.
+process.on("unhandledRejection", (reason) => {
+  console.error("[Backend] Unhandled promise rejection:", reason?.message || reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[Backend] Uncaught exception:", err.message);
+  // Do NOT exit — keep the server running for other clients
+});
+
 const PORT = parseInt(process.env.PORT, 10) || 3001;
 const ENV  = process.env.NODE_ENV || "development";
 const HAS_DEEPGRAM = !!process.env.DEEPGRAM_API_KEY;
@@ -48,8 +60,6 @@ wss.on("connection", function(ws, req) {
   var dg  = null;
 
   if (HAS_DEEPGRAM) {
-    // Pass a callback so DeepgramManager feeds final transcripts
-    // DIRECTLY into the LLM insights pipeline — no WS round-trip.
     dg = new DeepgramManager(ws, function onFinalChunk(text) {
       if (!text || text.trim().length < 20) return;
 
@@ -64,7 +74,16 @@ wss.on("connection", function(ws, req) {
       callGeminiInsights(prompt).then(function(result) {
         if (result) {
           ctx.mergeFromLLM(result);
-          ws.send(JSON.stringify({ type: "INSIGHTS_UPDATE", payload: result }));
+          // BUG FIX: Guard readyState before send.
+          // If the client disconnected while Deepgram was processing,
+          // ws.send() throws an unhandled exception → nodemon crash.
+          if (ws.readyState === ws.OPEN) {
+            try {
+              ws.send(JSON.stringify({ type: "INSIGHTS_UPDATE", payload: result }));
+            } catch (sendErr) {
+              console.warn("[Backend/DG] ws.send failed:", sendErr.message);
+            }
+          }
         }
       }).catch(function(err) {
         console.error("[Backend/DG] LLM call threw:", err.message);
