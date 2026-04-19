@@ -19,6 +19,7 @@ const MAX_HISTORY = 50;
 let socket = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
+let isReconnecting = false;   // true while a reconnect attempt is pending
 let isMeetActive = false;
 let activeMeetTabId = null;
 let lastChunkSentIndex = 0;
@@ -76,6 +77,10 @@ async function onMeetClosed() {
   sessionStartTime = null;
   sessionInsights = { tasks: [], decisions: [], risks: [] };
   sessionSummary = null;
+  // BUG FIX: Reset offscreen doc flag so it doesn't persist stale across
+  // service worker restarts (SW restart destroys the offscreen doc but
+  // leaves offscreenDocActive=true, silently breaking tab capture).
+  offscreenDocActive = false;
   stopTabCapture();
   disconnectWebSocket();
   broadcastToPanel({ type: "MEET_STATUS", active: false });
@@ -218,8 +223,9 @@ function stopTabCapture() {
 }
 
 async function ensureOffscreenDocument() {
-  if (offscreenDocActive) return;
-
+  // BUG FIX: Always re-verify the doc is actually alive even if
+  // offscreenDocActive=true. Service worker restarts destroy the offscreen
+  // doc without clearing the JS flag, so the flag can be stale.
   const existingContexts = await chrome.runtime.getContexts({
     contextTypes: ["OFFSCREEN_DOCUMENT"],
     documentUrls: [chrome.runtime.getURL("offscreen.html")],
@@ -227,11 +233,16 @@ async function ensureOffscreenDocument() {
 
   if (existingContexts.length > 0) {
     offscreenDocActive = true;
-    return;
+    return; // already alive — nothing to do
   }
 
-  offscreenReadyPromise = new Promise((resolve) => {
+  // Doc doesn't exist — create it
+  offscreenDocActive = false;
+  offscreenReadyPromise = new Promise((resolve, reject) => {
     offscreenReadyResolver = resolve;
+    // BUG FIX: Safety timeout — if OFFSCREEN_READY is never received
+    // (e.g. message lost on SW restart), don't hang tab capture forever.
+    setTimeout(() => reject(new Error("Offscreen document ready timeout")), 10000);
   });
 
   await chrome.offscreen.createDocument({
@@ -258,17 +269,32 @@ async function connectWebSocket() {
   )
     return;
 
+  if (isReconnecting) return;  // already queued — don't double-schedule
+
   clearTimeout(reconnectTimer);
   console.log("[MeetSense] Connecting WebSocket…");
 
   // Dynamic URL: reads from config.js (storage → deployment URL → localhost)
   const wsUrl = await getBackendUrl();
   console.log("[MeetSense] Backend URL:", wsUrl);
+
+  // ── Render cold-start guard ──────────────────────────────────────────────
+  // Render free-tier instances spin down after inactivity. The HTTP /health
+  // endpoint wakes the dyno; we wait up to 40 s before opening the WS so we
+  // don't get immediately disconnected during the cold-start window.
+  const httpUrl = wsUrl.replace(/^wss?:\/\//i, "https://");
+  try {
+    await waitForBackendReady(httpUrl, 40000);
+  } catch {
+    console.warn("[MeetSense] Backend health-check timed out — connecting anyway.");
+  }
+
   socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
     console.log("[MeetSense] WebSocket connected.");
-    reconnectDelay = 1000;
+    reconnectDelay = 1000;  // reset backoff on success
+    isReconnecting = false;
     broadcastToPanel({ type: "WS_STATUS", status: "connected" });
   };
 
@@ -318,23 +344,64 @@ async function connectWebSocket() {
     }
   };
 
-  socket.onclose = () => {
-    console.warn("[MeetSense] WebSocket closed.");
+  socket.onclose = (event) => {
+    // Log the close code so we can diagnose why the server dropped us.
+    // 1000 = normal, 1001 = going away, 1006 = abnormal (Render restart/timeout)
+    console.warn(
+      `[MeetSense] WebSocket closed. Code: ${event.code} | Reason: "${event.reason || "(none)"}"`
+    );
     broadcastToPanel({ type: "WS_STATUS", status: "disconnected" });
-    if (isMeetActive) {
-      const currentDelay = reconnectDelay;
+    if (isMeetActive && !isReconnecting) {
+      isReconnecting = true;
+      // Exponential backoff with ±20 % jitter to avoid thundering-herd
+      const jitter = reconnectDelay * 0.2 * (Math.random() - 0.5);
+      const delay  = Math.round(reconnectDelay + jitter);
+      console.log(`[MeetSense] Reconnecting in ${delay} ms…`);
+      reconnectTimer = setTimeout(() => {
+        isReconnecting = false;
+        connectWebSocket();
+      }, delay);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-      reconnectTimer = setTimeout(() => connectWebSocket(), currentDelay);
     }
   };
 
-  socket.onerror = () => {};
+  socket.onerror = (err) => {
+    console.warn("[MeetSense] WebSocket error:", err.message || err.type);
+  };
+}
+
+/**
+ * Polls the backend HTTP /health endpoint until it responds 200 or timeout.
+ * Renders free-tier needs up to ~30 s to cold-start.
+ */
+async function waitForBackendReady(baseUrl, timeoutMs = 40000) {
+  const start    = Date.now();
+  const interval = 3000;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        console.log("[MeetSense] Backend is awake.");
+        return;
+      }
+    } catch {
+      // Not ready yet — keep polling
+    }
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  throw new Error("Backend health-check timed out.");
 }
 
 function disconnectWebSocket() {
   clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  // BUG FIX: Reset isReconnecting so the next meeting's connectWebSocket()
+  // isn't permanently blocked. Without this, ending a meeting while a
+  // reconnect was in flight leaves isReconnecting=true forever.
+  isReconnecting = false;
+  reconnectDelay = 1000; // reset backoff for next session
   if (socket) {
-    socket.onclose = null;
+    socket.onclose = null; // prevent onclose from scheduling another reconnect
     socket.close();
     socket = null;
   }
@@ -408,7 +475,10 @@ async function sendTranscriptionToBackend() {
 
 function forwardAudioChunk(payload) {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    console.warn("[MeetSense] Cannot forward audio — WS not open.");
+    // Only warn once while reconnecting — avoid log spam
+    if (!isReconnecting) {
+      console.warn("[MeetSense] Cannot forward audio — WS not open.");
+    }
     return;
   }
 

@@ -38,6 +38,15 @@ const micDeniedBanner = document.getElementById("mic-denied-banner");
 const speechApiBanner = document.getElementById("speech-api-banner");
 
 // ──────────────────────────────────────────
+// 0. Safe sendMessage helper
+// (service worker can be killed at any time in MV3)
+// ──────────────────────────────────────────
+function safeSend(msg) {
+  if (!chrome.runtime?.id) return;
+  try { chrome.runtime.sendMessage(msg); } catch (_) {}
+}
+
+// ──────────────────────────────────────────
 // 1. Message listener from background.js
 // ──────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
@@ -109,7 +118,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
-chrome.runtime.sendMessage({ type: "GET_MEET_STATUS" });
+safeSend({ type: "GET_MEET_STATUS" });
 
 // ──────────────────────────────────────────
 // 2. Live Transcription Display
@@ -204,7 +213,7 @@ function updateTabCaptureBanner(active, error) {
 }
 
 btnStartCapture.addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "START_AUDIO_CAPTURE" });
+  safeSend({ type: "START_AUDIO_CAPTURE" });
   btnStartCapture.textContent = "Starting…";
   btnStartCapture.disabled = true;
 });
@@ -323,7 +332,7 @@ document.querySelector(".tab-bar").addEventListener("keydown", (e) => {
 // ──────────────────────────────────────────
 btnSummary.addEventListener("click", () => {
   summaryError.classList.add("hidden");
-  chrome.runtime.sendMessage({ type: "TRIGGER_SUMMARY" });
+  safeSend({ type: "TRIGGER_SUMMARY" });
 });
 
 function setSummaryLoading(loading) {
@@ -407,7 +416,7 @@ function summaryToMarkdown(data) {
 
 btnClear.addEventListener("click", () => {
   if (confirm("Clear all transcription and session data?")) {
-    chrome.runtime.sendMessage({ type: "CLEAR_SESSION" });
+    safeSend({ type: "CLEAR_SESSION" });
   }
 });
 
@@ -415,7 +424,7 @@ btnClear.addEventListener("click", () => {
 // 7b. Save Meeting + History Navigation
 // ──────────────────────────────────────────
 btnSaveMeeting.addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "SAVE_MEETING" });
+  safeSend({ type: "SAVE_MEETING" });
 });
 
 function showSaveToast() {
@@ -438,7 +447,7 @@ function showSaveToast() {
 }
 
 btnHistory.addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("history.html") });
+  chrome.tabs.create({ url: chrome.runtime.getURL("history.html") }).catch(() => {});
 });
 
 // ──────────────────────────────────────────

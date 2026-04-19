@@ -23,7 +23,7 @@ const LOCAL_WS_URL = "ws://localhost:3001";
  */
 function normalizeWsUrl(url) {
   if (!url) return url;
-  if (url.startsWith("http://"))  return url.replace("http://", "ws://");
+  if (url.startsWith("http://")) return url.replace("http://", "ws://");
   if (url.startsWith("https://")) return url.replace("https://", "wss://");
   return url;
 }
