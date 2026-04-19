@@ -10,7 +10,6 @@
 // end so users can browse past meetings in the History page.
 // ============================================================
 
-const WS_URL = "ws://localhost:3001";
 const MEET_PATTERN = "https://meet.google.com/*";
 const MEET_ORIGIN = "meet.google.com";
 const MAX_HISTORY = 50;
@@ -26,6 +25,12 @@ let tabCaptureActive = false;
 let sessionStartTime = null;
 let sessionInsights = { tasks: [], decisions: [], risks: [] };
 let sessionSummary = null;
+
+// ── Pause-driven chunking debounce ──
+// Prevents hammering the backend when the speaker produces
+// multiple rapid isFinal events in quick succession.
+let chunkDebounceTimer = null;
+const CHUNK_DEBOUNCE_MS = 800;
 
 // ══════════════════════════════════════════════════════════
 // 1.  Meet Tab Detection
@@ -230,7 +235,7 @@ async function ensureOffscreenDocument() {
 // 4.  WebSocket Manager
 // ══════════════════════════════════════════════════════════
 
-function connectWebSocket() {
+async function connectWebSocket() {
   if (
     socket &&
     (socket.readyState === WebSocket.OPEN ||
@@ -241,7 +246,10 @@ function connectWebSocket() {
   clearTimeout(reconnectTimer);
   console.log("[MeetSense] Connecting WebSocket…");
 
-  socket = new WebSocket(WS_URL);
+  // Dynamic URL: reads from config.js (storage → deployment URL → localhost)
+  const wsUrl = await getBackendUrl();
+  console.log("[MeetSense] Backend URL:", wsUrl);
+  socket = new WebSocket(wsUrl);
 
   socket.onopen = () => {
     console.log("[MeetSense] WebSocket connected.");
@@ -458,6 +466,17 @@ chrome.runtime.onMessage.addListener((msg) => {
       }
       break;
 
+    // ── Pause-driven chunking ──
+    // Fired by contentScript.js right when a speaker finishes a sentence.
+    // Debounced so rapid consecutive isFinal events don't flood the backend.
+    case "SEND_CHUNK_NOW":
+      if (!isMeetActive) break;
+      clearTimeout(chunkDebounceTimer);
+      chunkDebounceTimer = setTimeout(() => {
+        sendTranscriptionToBackend();
+      }, CHUNK_DEBOUNCE_MS);
+      break;
+
     case "NEW_TRANSCRIPTION":
       if (isMeetActive) {
         broadcastToPanel({
@@ -556,10 +575,13 @@ chrome.runtime.onMessage.addListener((msg) => {
 // 9.  Alarms — periodic chunk sender + keepalive
 // ══════════════════════════════════════════════════════════
 
-chrome.alarms.create("chunkProcessor", { periodInMinutes: 0.25 });
-chrome.alarms.create("keepAlive", { periodInMinutes: 0.4 });
+// chunkProcessor alarm is now a FALLBACK only (every 30s).
+// Primary triggering is pause-driven via SEND_CHUNK_NOW from contentScript.
+chrome.alarms.create("chunkProcessor", { periodInMinutes: 0.5 });
+chrome.alarms.create("keepAlive",      { periodInMinutes: 0.4 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  // Fallback chunk send — catches long continuous speech without pauses
   if (alarm.name === "chunkProcessor") {
     sendTranscriptionToBackend();
   }

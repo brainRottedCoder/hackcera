@@ -4,13 +4,16 @@
 // Runs in an offscreen document. Receives a tab-capture stream
 // ID from the background service worker, creates a MediaRecorder,
 // and sends audio chunks back as base64-encoded blobs.
-// These chunks are forwarded to the backend for Whisper STT.
+//
+// Chunks are sent every 1 second (vs 8s previously) because
+// Deepgram streaming STT benefits from smaller, more frequent
+// chunks for lower latency transcription.
 // ============================================================
 
 let mediaRecorder = null;
 let audioStream = null;
 let isRecording = false;
-const CHUNK_INTERVAL_MS = 8000;
+const CHUNK_INTERVAL_MS = 1000;
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "START_TAB_CAPTURE") {
@@ -76,7 +79,7 @@ async function startCapture(streamId) {
     mediaRecorder.start(CHUNK_INTERVAL_MS);
     isRecording = true;
 
-    console.log("[Offscreen] Tab audio capture started.");
+    console.log("[Offscreen] Tab audio capture started (1s chunks for Deepgram streaming).");
     chrome.runtime.sendMessage({ type: "TAB_CAPTURE_STARTED" });
   } catch (err) {
     console.error("[Offscreen] Failed to start capture:", err);

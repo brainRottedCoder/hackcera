@@ -85,8 +85,17 @@ function initSpeechRecognition() {
         payload: chunk,
       });
 
-      // Also persist to chrome.storage for summary generation
+      // Persist to chrome.storage for summary generation
       persistTranscript(chunk);
+
+      // ── Pause-Driven Chunking ──
+      // Fire chunk processing immediately when the speaker finishes
+      // a sentence (isFinal = true), instead of waiting for the 15s alarm.
+      // The background script debounces rapid consecutive calls.
+      chrome.runtime.sendMessage({
+        type: "SEND_CHUNK_NOW",
+        text: finalText.trim(),
+      });
     }
   };
 

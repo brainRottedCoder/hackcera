@@ -1,0 +1,54 @@
+// ============================================================
+// config.js — Extension Backend URL Configuration
+//
+// Single source of truth for the WebSocket backend URL.
+// Priority:
+//   1. chrome.storage.sync["backendUrl"]  (user-configured)
+//   2. DEPLOYMENT_WS_URL constant         (set at build time)
+//   3. ws://localhost:3001                 (local dev fallback)
+//
+// To point the extension at a deployed backend:
+//   chrome.storage.sync.set({ backendUrl: "wss://your-app.railway.app" })
+// ============================================================
+
+// ── Set this to your deployed backend URL after deploying ──
+// Example: "wss://meetsense-ai.railway.app"
+// Leave as empty string to use localhost during development.
+const DEPLOYMENT_WS_URL = "";
+
+const LOCAL_WS_URL = "ws://localhost:3001";
+
+/**
+ * Returns the WebSocket backend URL.
+ * Checks chrome.storage.sync first so users can override without
+ * reloading the extension.
+ * @returns {Promise<string>}
+ */
+async function getBackendUrl() {
+  try {
+    const result = await chrome.storage.sync.get(["backendUrl"]);
+    if (result.backendUrl && result.backendUrl.trim()) {
+      console.log("[Config] Using stored backend URL:", result.backendUrl);
+      return result.backendUrl.trim();
+    }
+  } catch (e) {
+    // storage.sync unavailable (e.g. in tests)
+  }
+
+  if (DEPLOYMENT_WS_URL) {
+    console.log("[Config] Using deployment URL:", DEPLOYMENT_WS_URL);
+    return DEPLOYMENT_WS_URL;
+  }
+
+  console.log("[Config] Using local dev URL:", LOCAL_WS_URL);
+  return LOCAL_WS_URL;
+}
+
+/**
+ * Persist a custom backend URL to chrome.storage.sync.
+ * @param {string} url - e.g. "wss://meetsense-ai.railway.app"
+ */
+async function setBackendUrl(url) {
+  await chrome.storage.sync.set({ backendUrl: url });
+  console.log("[Config] Backend URL updated to:", url);
+}

@@ -62,7 +62,7 @@ MeetSense AI is **not** a meeting summarizer. It is an **active execution intell
 │                                                                     │
 │  WebSocket Server ──► ContextManager (sliding window)              │
 │                    ──► LLM Orchestrator (Gemini 3.1 Flash)          │
-│                    ──► Transcriber (OpenAI Whisper — Track B)       │
+│                    ──► Transcriber (Deepgram Nova-3 — Track B)      │
 │                    ──► Prompt Builder                                │
 │                    ──► Response Validator                           │
 │                    ──► WebSocket push to side panel                │
@@ -101,12 +101,15 @@ MeetSense uses a **dual-track approach** for maximum accuracy and coverage:
 - Zero API cost — runs entirely in the browser
 - Persists final transcripts to `chrome.storage.local` for session continuity
 
-### Track B — Tab Capture + Whisper STT (High Accuracy, Optional)
+### Track B — Tab Capture + Deepgram Streaming STT (Real-Time, Free Tier Available)
 - Uses `chrome.tabCapture` API to capture the **tab's audio stream** (all participants, not just mic)
 - Streams audio to an **offscreen document** where `MediaRecorder` records in webm/opus at 32kbps
-- Audio chunks (8s intervals) are base64-encoded and sent via WebSocket to the backend
-- Backend accumulates chunks and periodically calls **OpenAI Whisper API** for transcription
-- Falls back gracefully if `OPENAI_API_KEY` is not configured — Track A still works independently
+- Audio chunks (**1s intervals**) are base64-encoded and sent via WebSocket to the backend
+- Backend opens a **real-time WebSocket to Deepgram Nova-3** — audio is streamed directly, no batching
+- Transcription results arrive within **~300ms** (vs 25s with batch Whisper)
+- Supports **interim + final results** — live preview appears in the side panel during transcription
+- **100 hours/month free tier** — covers ~300 thirty-minute meetings at zero cost
+- Falls back gracefully if `DEEPGRAM_API_KEY` is not configured — Track A still works independently
 
 Both tracks merge into the same LLM insights pipeline, so nothing is missed.
 
@@ -162,7 +165,7 @@ Every meeting is **automatically saved** when the Meet tab closes. The history p
 | Chrome Extension | Manifest V3 | Current standard; service workers, side panel, tab capture |
 | Speech Recognition | `webkitSpeechRecognition` API | Built into Chrome, zero cost, real-time interim results |
 | Audio Capture | `chrome.tabCapture` + Offscreen Doc | Captures all tab audio (all speakers), not just mic |
-| STT (Track B) | OpenAI Whisper API | Industry-leading accuracy for multi-speaker audio |
+| STT (Track B) | Deepgram Nova-3 (streaming WebSocket) | Real-time results (~300ms), 100 hrs/mo free, speaker diarization |
 | LLM | Google Gemini 3.1 Flash / Flash Lite | Fastest inference, native JSON mode, $0.003/meeting |
 | Frontend | Vanilla JS + Tailwind-inspired CSS | Lightweight, fast load in side panel |
 | Backend | Node.js (Express + `ws`) | Non-blocking, native WebSocket support |
@@ -196,7 +199,7 @@ meetsense-ai/
     ├── contextManager.js       # Sliding window context buffer
     ├── llmOrchestrator.js      # Gemini API with model fallback + backoff
     ├── promptBuilder.js        # Insights + Summary prompt templates
-    ├── transcriber.js          # Whisper API integration (Track B)
+    ├── transcriber.js          # Deepgram streaming STT (Track B)
     ├── package.json
     ├── .env.example
     └── .env
@@ -210,7 +213,7 @@ meetsense-ai/
 - Node.js 18+
 - Chrome 116+ (for `chrome.tabCapture` and offscreen API)
 - Google Gemini API key (free tier: 15 RPM, 1500 RPD)
-- _(Optional)_ OpenAI API key for Whisper STT (Track B)
+- _(Optional)_ Deepgram API key for streaming tab-capture STT (Track B) — 100 hrs/mo free
 
 ### 1. Backend Setup
 
@@ -218,7 +221,7 @@ meetsense-ai/
 cd backend
 npm install
 cp .env.example .env
-# Edit .env — add your GEMINI_API_KEY (required) and OPENAI_API_KEY (optional)
+# Edit .env — add your GEMINI_API_KEY (required) and DEEPGRAM_API_KEY (optional)
 npm start
 ```
 
@@ -249,9 +252,10 @@ Server starts at `ws://localhost:3001`.
 # Get your key at https://aistudio.google.com/apikey
 GEMINI_API_KEY=AIza...
 
-# Optional — OpenAI Whisper for tab-captured audio transcription
-# If not set, only Web Speech API (Track A) transcription is used
-OPENAI_API_KEY=sk-...
+# Optional — Deepgram streaming STT for tab-captured audio
+# Free tier: 100 hours/month. If not set, only Web Speech API (Track A) is used
+# Get your key at https://console.deepgram.com
+DEEPGRAM_API_KEY=...
 
 # Server port (default: 3001)
 PORT=3001
@@ -291,6 +295,37 @@ All LLM output goes through a multi-step validator:
 3. Parse and verify required fields (`tasks`, `decisions`, `risks`)
 4. Graceful partial recovery — if some fields exist, return them with empty defaults for missing ones
 
+### Deepgram Streaming Pipeline (Track B)
+
+Unlike batch STT services, Deepgram streams audio and returns results in real-time:
+
+```
+Extension offscreen.js (1s audio chunks)
+    │
+    ▼  base64 via chrome.runtime.sendMessage
+background.js
+    │
+    ▼  AUDIO_CHUNK via WebSocket
+server.js → dgStream.sendAudio(base64)
+    │
+    ▼  Binary audio forwarded instantly
+Deepgram WebSocket (Nova-3, live mode)
+    │
+    ▼  ~300ms later
+onTranscript callback
+    ├── interim → forward to side panel (live preview)
+    └── final   → ContextManager + LLM insights pipeline
+```
+
+Key configuration:
+- **Model**: `nova-3` (Deepgram's most accurate general-purpose model)
+- **Punctuation**: enabled (smart formatting)
+- **Interim results**: enabled (live preview in side panel)
+- **Endpointing**: 500ms (detects end of utterance quickly)
+- **Utterance end**: 1000ms (triggers final result)
+
+Each client WebSocket connection gets its own `DeepgramStream` instance — full session isolation.
+
 ---
 
 ## Cost Model
@@ -300,18 +335,18 @@ All LLM output goes through a multi-step validator:
 | Component | Cost |
 |---|---|
 | Gemini 3.1 Flash (insights, ~120 calls) | ~$0.003 |
-| Whisper API (Track B, optional, ~15 segments) | ~$0.03 |
+| Deepgram Nova-3 (Track B, optional, 30 min streaming) | **Free** (within 100 hrs/mo) |
 | **Total with Track A only** | **~$0.003** |
-| **Total with Track A + B** | **~$0.03** |
+| **Total with Track A + B** | **~$0.003** (free tier) |
 
 ### Monthly (100 meetings)
 
 | Tier | Cost |
 |---|---|
 | Track A only (Web Speech API) | **< $1/month** in LLM costs |
-| Track A + B (with Whisper) | **~$3-5/month** |
+| Track A + B (with Deepgram free tier) | **< $1/month** (100 hrs free) |
 | Infrastructure (Railway/Render) | ~$5/month |
-| **Total MVP** | **~$5-10/month** |
+| **Total MVP** | **~$5-6/month** |
 
 ---
 
@@ -367,7 +402,7 @@ The meeting intelligence market is dominated by tools that operate **after the f
 ### The Moat
 
 - **Real-time extraction** is technically hard (low-latency LLM pipeline, context window management, deduplication). Most competitors don't even try.
-- **Dual-track transcription** (browser Speech API + Whisper on tab audio) is a novel approach that no competitor uses. It provides both zero-cost baseline and premium accuracy.
+- **Dual-track transcription** (browser Speech API + Deepgram streaming STT on tab audio) is a novel approach that no competitor uses. It provides both zero-cost baseline and real-time high-accuracy streaming — with Deepgram's free tier covering most users entirely.
 - **Meeting history as organizational knowledge** creates a data network effect — the more your team uses it, the more valuable the searchable history becomes.
 - **Integration moat** — once MeetSense auto-pushes tasks to your Jira board and decisions to your Notion database, switching costs are enormous.
 
@@ -415,6 +450,7 @@ The meeting intelligence market is dominated by tools that operate **after the f
 | Metric | Target |
 |---|---|
 | End-to-end latency (Track A → Insights) | < 5 seconds (P95) |
+| Tab-capture STT latency (Track B, Deepgram) | < 1.5 seconds (P95) |
 | Task extraction accuracy | > 80% match on scripted test meetings |
 | Real-time update reliability | 0 dropped updates in 30-min session |
 | Caption capture rate (Track A) | > 95% of speech captured |
@@ -429,7 +465,7 @@ The meeting intelligence market is dominated by tools that operate **after the f
 - [Chrome Extensions MV3](https://developer.chrome.com/docs/extensions/mv3/) — Service workers, side panel, tab capture, offscreen documents
 - [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) — Real-time browser-native speech recognition
 - [Google Gemini 3.1 Flash](https://ai.google.dev/) — Fastest production LLM with native JSON mode
-- [OpenAI Whisper](https://platform.openai.com/docs/guides/speech-to-text) — State-of-the-art speech-to-text for tab-captured audio
+- [Deepgram Nova-3](https://developers.deepgram.com/docs/models) — Real-time streaming speech-to-text with ~300ms latency, 100 hrs/mo free
 - [Node.js](https://nodejs.org/) + [ws](https://github.com/websockets/ws) — Lightweight WebSocket server
 - [Express](https://expressjs.com/) — HTTP health check endpoint
 

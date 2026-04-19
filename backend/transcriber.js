@@ -1,117 +1,164 @@
 // ============================================================
-// transcriber.js — Whisper API Transcription
+// transcriber.js — Deepgram Streaming STT
 //
-// Receives audio buffers (base64-encoded webm/opus) from
-// the extension's offscreen document via the WebSocket server.
-// Accumulates them and periodically sends to OpenAI Whisper
-// for transcription. Returns the text result.
+// Opens a real-time WebSocket connection to Deepgram's Nova-3
+// model. Audio chunks from the extension are streamed directly
+// — no batching, no waiting. Transcription results arrive
+// within ~300ms via Deepgram's WebSocket.
 //
-// Falls back gracefully if OPENAI_API_KEY is not configured
+// Falls back gracefully if DEEPGRAM_API_KEY is not configured
 // (tab-capture transcription simply won't be available).
+//
+// Each client WS connection gets its own Deepgram live session.
 // ============================================================
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const WHISPER_API_URL = "https://api.openai.com/v1/audio/transcriptions";
-const ACCUMULATE_MS = 15000;
-const MAX_AUDIO_BUFFER_BYTES = 5 * 1024 * 1024;
-
-let audioBuffers = [];
-let bufferStartTime = null;
-let transcribeTimer = null;
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
 
 function isConfigured() {
-  return !!OPENAI_API_KEY;
+  return !!DEEPGRAM_API_KEY;
 }
 
-function addAudioChunk(base64Data, mimeType) {
-  const buffer = Buffer.from(base64Data, "base64");
-  audioBuffers.push({ buffer, mimeType: mimeType || "audio/webm" });
-
-  if (!bufferStartTime) bufferStartTime = Date.now();
-
-  if (buffer.byteLength > MAX_AUDIO_BUFFER_BYTES) {
-    audioBuffers.shift();
+class DeepgramStream {
+  constructor(onTranscript) {
+    this.onTranscript = onTranscript;
+    this.dg = null;
+    this.connection = null;
+    this.isConnected = false;
+    this.pendingAudio = [];
+    this.finalBuffer = "";
   }
 
-  if (!transcribeTimer) {
-    transcribeTimer = setTimeout(() => {
-      flushAndTranscribe();
-    }, ACCUMULATE_MS);
-  }
-}
-
-async function flushAndTranscribe() {
-  transcribeTimer = null;
-
-  if (audioBuffers.length === 0) return null;
-
-  if (!isConfigured()) {
-    console.warn(
-      "[Transcriber] OPENAI_API_KEY not set — skipping Whisper transcription."
-    );
-    audioBuffers = [];
-    bufferStartTime = null;
-    return null;
-  }
-
-  const chunks = [...audioBuffers];
-  audioBuffers = [];
-  bufferStartTime = null;
-
-  try {
-    const combinedBuffer = Buffer.concat(chunks.map((c) => c.buffer));
-
-    const ext = chunks[0]?.mimeType?.includes("webm") ? "webm" : "ogg";
-    const filename = `meeting_audio.${ext}`;
-
-    const formData = new FormData();
-    formData.append("file", new Blob([combinedBuffer], { type: chunks[0]?.mimeType }), filename);
-    formData.append("model", "whisper-1");
-    formData.append("response_format", "text");
-    formData.append("language", "en");
-
-    const response = await fetch(WHISPER_API_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(
-        `[Transcriber] Whisper API error ${response.status}: ${errText}`
+  async start() {
+    if (!isConfigured()) {
+      console.warn(
+        "[Deepgram] DEEPGRAM_API_KEY not set — streaming STT disabled."
       );
-      return null;
+      return;
     }
 
-    const transcription = await response.text();
-    console.log(
-      `[Transcriber] Whisper result (${transcription.length} chars): ${transcription.slice(0, 200)}`
-    );
+    try {
+      const { createClient } = require("@deepgram/sdk");
+      this.dg = createClient(DEEPGRAM_API_KEY);
 
-    if (transcription.trim().length < 5) return null;
+      this.connection = this.dg.listen.live({
+        model: "nova-3",
+        language: "en-US",
+        punctuate: true,
+        interim_results: true,
+        smart_format: true,
+        endpointing: 500,
+        utterance_end_ms: 1000,
+      });
 
-    return transcription.trim();
-  } catch (err) {
-    console.error("[Transcriber] Transcription failed:", err.message);
-    return null;
+      this.connection.on("open", () => {
+        this.isConnected = true;
+        console.log("[Deepgram] ✅ Streaming connection opened.");
+
+        if (this.pendingAudio.length > 0) {
+          console.log(
+            `[Deepgram] Flushing ${this.pendingAudio.length} pending audio chunks.`
+          );
+          this.pendingAudio.forEach((buf) => {
+            try {
+              this.connection.send(buf);
+            } catch (_) {}
+          });
+          this.pendingAudio = [];
+        }
+      });
+
+      this.connection.on("transcript", (data) => {
+        const alternative = data?.channel?.alternatives?.[0];
+        if (!alternative) return;
+
+        const transcript = alternative.transcript;
+        const isFinal = data.is_final;
+
+        if (!transcript || transcript.trim().length === 0) return;
+
+        if (isFinal) {
+          this.finalBuffer += transcript.trim() + " ";
+
+          console.log(
+            `[Deepgram] Final: "${transcript.trim().slice(0, 100)}"`
+          );
+
+          this.onTranscript({
+            text: transcript.trim(),
+            isFinal: true,
+            timestamp: Date.now(),
+          });
+        } else {
+          this.onTranscript({
+            text: transcript.trim(),
+            isFinal: false,
+            timestamp: Date.now(),
+          });
+        }
+      });
+
+      this.connection.on("close", (code, reason) => {
+        this.isConnected = false;
+        console.log(
+          `[Deepgram] Connection closed (code=${code}, reason=${reason || "none"}).`
+        );
+
+        if (this.finalBuffer.trim().length > 0) {
+          console.log(
+            `[Deepgram] Session ended. Total final transcript length: ${this.finalBuffer.trim().length} chars.`
+          );
+        }
+      });
+
+      this.connection.on("error", (err) => {
+        console.error("[Deepgram] ❌ Error:", err?.message || err);
+        this.isConnected = false;
+      });
+    } catch (err) {
+      console.error("[Deepgram] Failed to start:", err.message);
+    }
   }
-}
 
-function reset() {
-  audioBuffers = [];
-  bufferStartTime = null;
-  if (transcribeTimer) {
-    clearTimeout(transcribeTimer);
-    transcribeTimer = null;
+  sendAudio(base64Data) {
+    if (!this.connection) {
+      return;
+    }
+
+    const buffer = Buffer.from(base64Data, "base64");
+
+    if (this.isConnected) {
+      try {
+        this.connection.send(buffer);
+      } catch (err) {
+        console.warn("[Deepgram] Send error:", err.message);
+      }
+    } else {
+      this.pendingAudio.push(buffer);
+      if (this.pendingAudio.length > 50) {
+        this.pendingAudio.shift();
+      }
+    }
+  }
+
+  stop() {
+    if (this.connection) {
+      try {
+        if (this.isConnected) {
+          this.connection.finish();
+        }
+      } catch (_) {}
+      this.connection = null;
+      this.isConnected = false;
+    }
+    this.pendingAudio = [];
+  }
+
+  getAccumulatedTranscript() {
+    return this.finalBuffer.trim();
   }
 }
 
 module.exports = {
   isConfigured,
-  addAudioChunk,
-  flushAndTranscribe,
-  reset,
+  DeepgramStream,
 };
