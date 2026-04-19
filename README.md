@@ -2,6 +2,8 @@
 
 > _A real-time intelligence layer that transforms live conversations into structured execution data — before the meeting even ends._
 
+✅ **Live Production Deployment Available**: https://hackcera.onrender.com
+
 ---
 
 ## The Problem
@@ -105,9 +107,10 @@ MeetSense uses a **dual-track approach** for maximum accuracy and coverage:
 - Uses `chrome.tabCapture` API to capture the **tab's audio stream** (all participants, not just mic)
 - Streams audio to an **offscreen document** where `MediaRecorder` records in webm/opus at 32kbps
 - Audio chunks (**1s intervals**) are base64-encoded and sent via WebSocket to the backend
-- Backend opens a **real-time WebSocket to Deepgram Nova-3** — audio is streamed directly, no batching
+- Backend `DeepgramManager` handles real-time WebSocket connection to Deepgram Nova-3 — audio is streamed directly, no batching
 - Transcription results arrive within **~300ms** (vs 25s with batch Whisper)
 - Supports **interim + final results** — live preview appears in the side panel during transcription
+- **Direct LLM pipeline integration**: Final transcripts feed directly into insights extraction without extra WebSocket roundtrips
 - **100 hours/month free tier** — covers ~300 thirty-minute meetings at zero cost
 - Falls back gracefully if `DEEPGRAM_API_KEY` is not configured — Track A still works independently
 
@@ -156,6 +159,21 @@ Every meeting is **automatically saved** when the Meet tab closes. The history p
 - WebSocket connection badge (Live / Reconnecting)
 - AI processing animation
 
+### 7. ✅ **NEW: Deployed Backend Support**
+- Production-ready backend deployed on Render
+- User-configurable backend URL via `chrome.storage.sync` (no extension reload needed)
+- Automatic URL normalization (http → ws, https → wss)
+- Health check endpoint `/health` for deployment verification
+- CORS enabled for all origins
+- Environment-based configuration (production/development modes)
+
+### 8. ✅ **NEW: Robust Backend Architecture**
+- DeepgramManager for isolated per-client Deepgram connections
+- ContextManager sliding window with in-memory session storage
+- LLM Orchestrator with model cascade and exponential backoff
+- Automatic reconnect handling
+- Session isolation per WebSocket connection
+
 ---
 
 ## Technology Stack
@@ -169,7 +187,9 @@ Every meeting is **automatically saved** when the Meet tab closes. The history p
 | LLM | Google Gemini 3.1 Flash / Flash Lite | Fastest inference, native JSON mode, $0.003/meeting |
 | Frontend | Vanilla JS + Tailwind-inspired CSS | Lightweight, fast load in side panel |
 | Backend | Node.js (Express + `ws`) | Non-blocking, native WebSocket support |
-| Data Persistence | `chrome.storage.local` | No external DB needed for MVP; per-device storage |
+| Data Persistence | `chrome.storage.local` + `chrome.storage.sync` | Local storage for meetings, sync for user preferences |
+| Deployment | Render / Railway | Automatic HTTPS, WebSocket support, zero-config deployment |
+| SDK | @google/genai, @deepgram/sdk | Official SDKs for reliable API communication |
 
 ---
 
@@ -189,20 +209,27 @@ meetsense-ai/
 │   ├── history.html            # Meeting history page
 │   ├── history.js              # History list + detail view logic
 │   ├── history.css             # History page styles
+│   ├── config.js               # Backend URL configuration + runtime override
 │   └── icons/
 │       ├── icon16.png
 │       ├── icon48.png
 │       └── icon128.png
 │
 └── backend/
-    ├── server.js               # Express + WebSocket server
+    ├── server.js               # Express + WebSocket server + health checks
     ├── contextManager.js       # Sliding window context buffer
-    ├── llmOrchestrator.js      # Gemini API with model fallback + backoff
+    ├── llmOrchestrator.js      # Gemini API with model cascade + backoff
     ├── promptBuilder.js        # Insights + Summary prompt templates
-    ├── transcriber.js          # Deepgram streaming STT (Track B)
+    ├── deepgramManager.js      # Deepgram streaming STT connection manager
+    ├── diagnose.js             # Diagnostic utilities
+    ├── scan-models.js          # LLM model availability scanner
+    ├── test.js               # Test utilities
+    ├── create-icons.js         # Icon generation script
     ├── package.json
     ├── .env.example
-    └── .env
+    ├── .env
+    ├── Procfile               # Railway/Render deployment config
+    └── railway.toml           # Railway deployment configuration
 ```
 
 ---
@@ -243,6 +270,16 @@ Server starts at `ws://localhost:3001`.
 5. Click **Generate Summary** anytime during or after the meeting
 6. Click **History** to browse past meetings
 
+### 4. Configure Custom Backend (Optional)
+
+To use your own deployed backend:
+```javascript
+// Run this in Chrome DevTools on the extension page
+chrome.storage.sync.set({ backendUrl: "wss://your-backend-url.com" })
+```
+
+The extension will automatically use your custom URL without requiring a reload.
+
 ---
 
 ## Environment Variables
@@ -260,6 +297,28 @@ DEEPGRAM_API_KEY=...
 # Server port (default: 3001)
 PORT=3001
 ```
+
+---
+
+## Deployment
+
+The backend is production-ready and can be deployed to any Node.js hosting platform that supports WebSockets.
+
+### ✅ Production Deployment
+The official production instance is running at:
+```
+wss://hackcera.onrender.com
+```
+
+Check health status: https://hackcera.onrender.com/health
+
+### Supported Platforms:
+- **Render** (Recommended) - Zero-config deployment, automatic HTTPS
+- **Railway** - Free tier available, built-in domain
+- **Fly.io** - Custom deployments
+- Any Node.js hosting with WebSocket support
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for complete step-by-step deployment instructions.
 
 ---
 
@@ -297,7 +356,7 @@ All LLM output goes through a multi-step validator:
 
 ### Deepgram Streaming Pipeline (Track B)
 
-Unlike batch STT services, Deepgram streams audio and returns results in real-time:
+Unlike batch STT services, Deepgram streams audio and returns results in real-time. **DeepgramManager** handles isolated per-client connections:
 
 ```
 Extension offscreen.js (1s audio chunks)
@@ -306,7 +365,7 @@ Extension offscreen.js (1s audio chunks)
 background.js
     │
     ▼  AUDIO_CHUNK via WebSocket
-server.js → dgStream.sendAudio(base64)
+server.js → DeepgramManager.sendAudio(base64)
     │
     ▼  Binary audio forwarded instantly
 Deepgram WebSocket (Nova-3, live mode)
@@ -314,7 +373,7 @@ Deepgram WebSocket (Nova-3, live mode)
     ▼  ~300ms later
 onTranscript callback
     ├── interim → forward to side panel (live preview)
-    └── final   → ContextManager + LLM insights pipeline
+    └── final   → DIRECT ContextManager + LLM insights pipeline
 ```
 
 Key configuration:
@@ -323,8 +382,9 @@ Key configuration:
 - **Interim results**: enabled (live preview in side panel)
 - **Endpointing**: 500ms (detects end of utterance quickly)
 - **Utterance end**: 1000ms (triggers final result)
+- **Zero roundtrip**: Final transcripts feed directly into LLM pipeline with no extra WebSocket hops
 
-Each client WebSocket connection gets its own `DeepgramStream` instance — full session isolation.
+Each client WebSocket connection gets its own `DeepgramManager` instance — full session isolation.
 
 ---
 

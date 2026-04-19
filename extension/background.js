@@ -430,17 +430,10 @@ async function sendSummaryRequest() {
     return;
   }
 
+  // Always forward to backend — backend ContextManager tracks session history natively
   const result = await chrome.storage.local.get(["transcriptLog"]);
   const log = result.transcriptLog || [];
-
-  if (log.length === 0) {
-    broadcastToPanel({
-      type: "SUMMARY_ERROR",
-      message: "No transcript to summarize yet.",
-    });
-    return;
-  }
-
+  
   const fullTranscript = log
     .filter((c) => c.isFinal)
     .map((c) => c.text)
