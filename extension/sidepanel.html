@@ -19,45 +19,66 @@
       </div>
     </div>
     <div class="header-right">
-      <div id="ws-indicator" class="ws-badge disconnected">
+      <button id="btn-history" class="btn-history" aria-label="View meeting history" title="Meeting History">
+        <span class="history-icon">📁</span>
+        <span class="history-label">History</span>
+      </button>
+      <div id="ws-indicator" class="ws-badge disconnected" aria-label="WebSocket connection status">
         <span class="ws-dot"></span>
         <span id="ws-label">Connecting…</span>
       </div>
     </div>
   </header>
 
-  <!-- ── Captions Missing Banner ── -->
-  <div id="captions-banner" class="alert-banner hidden">
-    ⚠️ Enable captions in Google Meet to activate MeetSense AI
+  <!-- ── Speech Status Banner ── -->
+  <div id="speech-banner" class="status-banner listening">
+    <span class="status-banner-icon" id="speech-banner-icon">🎤</span>
+    <span id="speech-banner-text">Listening for speech…</span>
   </div>
 
-  <!-- ── Live Transcript ── -->
-  <section class="section">
+  <!-- ── Tab Capture Status ── -->
+  <div id="tabcapture-banner" class="status-banner tabcapture hidden">
+    <span class="status-banner-icon">🔊</span>
+    <span id="tabcapture-banner-text">Tab audio captured</span>
+  </div>
+
+  <!-- ── Mic Denied Banner ── -->
+  <div id="mic-denied-banner" class="alert-banner hidden" role="alert">
+    🎤 Microphone access denied. Allow mic access in Chrome to enable transcription.
+  </div>
+
+  <!-- ── Speech API Not Supported ── -->
+  <div id="speech-api-banner" class="alert-banner hidden" role="alert">
+    ⚠️ Web Speech API not supported. Use a recent version of Chrome.
+  </div>
+
+  <!-- ── Live Transcription ── -->
+  <section class="section" aria-labelledby="transcription-title">
     <div class="section-header">
-      <h2 class="section-title">📝 Live Transcript</h2>
+      <h2 class="section-title" id="transcription-title">🎙️ Live Transcription</h2>
       <span id="transcript-count" class="badge">0 lines</span>
     </div>
-    <div id="transcript-feed" class="transcript-box">
-      <p class="empty-state">Waiting for captions…</p>
+    <div id="transcript-feed" class="transcript-box" role="log" aria-live="polite" aria-label="Live transcription feed">
+      <p class="empty-state">Waiting for speech…</p>
     </div>
   </section>
 
   <!-- ── AI Insights Tabs ── -->
-  <section class="section">
+  <section class="section" aria-labelledby="insights-title">
     <div class="section-header">
-      <h2 class="section-title">⚡ AI Insights</h2>
-      <div id="processing-dot" class="processing-dot hidden" title="AI processing…"></div>
+      <h2 class="section-title" id="insights-title">⚡ AI Insights</h2>
+      <div id="processing-dot" class="processing-dot hidden" title="AI processing…" aria-label="AI processing in progress"></div>
     </div>
 
     <!-- Tabs -->
-    <div class="tab-bar">
-      <button class="tab-btn active" data-tab="tasks">✅ Tasks</button>
-      <button class="tab-btn" data-tab="decisions">🟡 Decisions</button>
-      <button class="tab-btn" data-tab="risks">🔴 Risks</button>
+    <div class="tab-bar" role="tablist" aria-label="AI Insights tabs">
+      <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="tab-tasks" id="tab-btn-tasks" data-tab="tasks">✅ Tasks</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-decisions" id="tab-btn-decisions" data-tab="decisions">🟡 Decisions</button>
+      <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tab-risks" id="tab-btn-risks" data-tab="risks">🔴 Risks</button>
     </div>
 
     <!-- Task Panel -->
-    <div id="tab-tasks" class="tab-content active">
+    <div id="tab-tasks" class="tab-content active" role="tabpanel" aria-labelledby="tab-btn-tasks">
       <table class="task-table">
         <thead>
           <tr>
@@ -76,14 +97,14 @@
     </div>
 
     <!-- Decisions Panel -->
-    <div id="tab-decisions" class="tab-content hidden">
+    <div id="tab-decisions" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-decisions">
       <ul id="decisions-list" class="insight-list">
         <li class="empty-state">No decisions captured yet.</li>
       </ul>
     </div>
 
     <!-- Risks Panel -->
-    <div id="tab-risks" class="tab-content hidden">
+    <div id="tab-risks" class="tab-content hidden" role="tabpanel" aria-labelledby="tab-btn-risks">
       <ul id="risks-list" class="insight-list risk-list">
         <li class="empty-state">No risks flagged yet.</li>
       </ul>
@@ -91,9 +112,9 @@
   </section>
 
   <!-- ── Manual Summary Button ── -->
-  <section class="section summary-section">
+  <section class="section summary-section" aria-labelledby="summary-title">
     <div class="section-header">
-      <h2 class="section-title">📋 Meeting Summary</h2>
+      <h2 class="section-title" id="summary-title">📋 Meeting Summary</h2>
     </div>
     <p class="summary-hint">Click to generate a full AI summary of the meeting so far.</p>
     <button id="btn-summary" class="btn-primary">
@@ -121,12 +142,14 @@
       </div>
       <div class="summary-actions">
         <button id="btn-copy" class="btn-secondary">📋 Copy JSON</button>
+        <button id="btn-copy-md" class="btn-secondary">📝 Copy Markdown</button>
+        <button id="btn-save-meeting" class="btn-secondary">💾 Save Meeting</button>
         <button id="btn-clear" class="btn-ghost">🗑️ Clear Session</button>
       </div>
     </div>
 
     <!-- Summary Error -->
-    <div id="summary-error" class="error-banner hidden"></div>
+    <div id="summary-error" class="error-banner hidden" role="alert"></div>
   </section>
 
   <script src="sidepanel.js"></script>

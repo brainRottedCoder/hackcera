@@ -1,28 +1,42 @@
 // ============================================================
-// server.js — Node.js WebSocket + Express Backend
+// server.js — Node.js WebSocket + Express Backend (v2)
 //
-// Handles two message types from extension:
-//   "PROCESS_CHUNK"   → 12-second real-time insights (TRACK B)
-//   "GENERATE_SUMMARY" → manual full-transcript summary (TRACK C)
+// Handles three input sources:
+//   PROCESS_CHUNK   — final transcription text from Speech API
+//   AUDIO_CHUNK     — base64 audio from tab capture → Whisper STT
+//   GENERATE_SUMMARY — manual full-transcript summary
+//
+// All sources feed into the same LLM insights pipeline.
 // ============================================================
 
 require("dotenv").config();
-const express   = require("express");
+const express = require("express");
 const { WebSocketServer } = require("ws");
-const http      = require("http");
-const { callGeminiInsights, callGeminiSummary } = require("./llmOrchestrator");
-const { buildInsightsPrompt, buildSummaryPrompt } = require("./promptBuilder");
+const http = require("http");
+const {
+  callGeminiInsights,
+  callGeminiSummary,
+} = require("./llmOrchestrator");
+const {
+  buildInsightsPrompt,
+  buildSummaryPrompt,
+} = require("./promptBuilder");
 const ContextManager = require("./contextManager");
+const transcriber = require("./transcriber");
 
 const PORT = parseInt(process.env.PORT, 10) || 3001;
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
-const wss    = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server });
 
-app.get("/health", (_, res) => res.json({ status: "ok" }));
+app.get("/health", (_, res) =>
+  res.json({
+    status: "ok",
+    whisper: transcriber.isConfigured() ? "configured" : "not_configured",
+  })
+);
 
-// ── One ContextManager per connected WebSocket session ──
 wss.on("connection", (ws) => {
   console.log("[Backend] New client connected.");
   const ctx = new ContextManager();
@@ -36,16 +50,14 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ── PING keepalive ──
     if (msg.type === "PING") {
       ws.send(JSON.stringify({ type: "PONG" }));
       return;
     }
 
-    // ── TRACK B: Real-time chunk processing (every 12s) ──
+    // ── PROCESS_CHUNK: Speech API transcription text ──
     if (msg.type === "PROCESS_CHUNK") {
       const { text } = msg;
-
       if (!text || text.trim().length < 20) return;
 
       ctx.addChunk(text);
@@ -61,106 +73,152 @@ wss.on("connection", (ws) => {
         result = await callGeminiInsights(prompt);
       } catch (err) {
         console.error("[Backend] LLM call threw:", err.message);
-        ws.send(JSON.stringify({
-          type: "INSIGHTS_ERROR",
-          message: "AI processing failed. Please check your API key and quota."
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "INSIGHTS_ERROR",
+            message: "AI processing failed. Please check your API key and quota.",
+          })
+        );
         return;
       }
 
       if (result) {
         ctx.mergeFromLLM(result);
-
-        ws.send(JSON.stringify({
-          type: "INSIGHTS_UPDATE",
-          payload: result
-        }));
+        ws.send(JSON.stringify({ type: "INSIGHTS_UPDATE", payload: result }));
       } else {
-        ws.send(JSON.stringify({
-          type: "INSIGHTS_ERROR",
-          message: "AI returned no result. API quota may be exhausted — check your Gemini API key."
-        }));
+        ws.send(
+          JSON.stringify({
+            type: "INSIGHTS_ERROR",
+            message: "AI returned no result. API quota may be exhausted.",
+          })
+        );
       }
     }
 
-    // ── TRACK C: Manual full-meeting summary ──
+    // ── AUDIO_CHUNK: Tab-captured audio → Whisper STT ──
+    if (msg.type === "AUDIO_CHUNK") {
+      const { audioBase64, mimeType } = msg;
+
+      if (!audioBase64) return;
+
+      if (!transcriber.isConfigured()) {
+        return;
+      }
+
+      transcriber.addAudioChunk(audioBase64, mimeType);
+    }
+
+    // ── GENERATE_SUMMARY: Manual full-meeting summary ──
     if (msg.type === "GENERATE_SUMMARY") {
-      console.log("\n[Summary] ═══════════════ SUMMARY REQUEST START ═══════════════");
+      console.log(
+        "\n[Summary] ═══════════════ SUMMARY REQUEST START ═══════════════"
+      );
 
       const { fullTranscript } = msg;
 
-      // ── Step 1: validate transcript ──
-      console.log(`[Summary] Step 1 — Transcript received. Length: ${fullTranscript?.length ?? 0} chars`);
+      // Flush any remaining audio buffer first
+      let whisperText = null;
+      if (transcriber.isConfigured()) {
+        whisperText = await transcriber.flushAndTranscribe();
+        if (whisperText) {
+          ctx.addChunk(whisperText);
+        }
+      }
 
-      if (!fullTranscript || fullTranscript.trim().length < 50) {
-        console.warn("[Summary] ❌ Transcript too short to summarize. Sending SUMMARY_ERROR.");
-        ws.send(JSON.stringify({
-          type: "SUMMARY_ERROR",
-          message: "Transcript too short to summarize."
-        }));
+      const combinedTranscript = fullTranscript + (whisperText ? " " + whisperText : "");
+
+      console.log(
+        `[Summary] Step 1 — Transcript received. Length: ${combinedTranscript?.length ?? 0} chars`
+      );
+
+      if (
+        !combinedTranscript ||
+        combinedTranscript.trim().length < 50
+      ) {
+        console.warn(
+          "[Summary] ❌ Transcript too short to summarize."
+        );
+        ws.send(
+          JSON.stringify({
+            type: "SUMMARY_ERROR",
+            message: "Transcript too short to summarize.",
+          })
+        );
         return;
       }
 
-      // ── Step 2: build prompt ──
-      const accTasks     = ctx.getAllTasks();
+      const accTasks = ctx.getAllTasks();
       const accDecisions = ctx.getAllDecisions();
-      console.log(`[Summary] Step 2 — Context: ${accTasks.length} accumulated tasks, ${accDecisions.length} decisions`);
+      console.log(
+        `[Summary] Step 2 — Context: ${accTasks.length} tasks, ${accDecisions.length} decisions`
+      );
 
       let prompt;
       try {
-        prompt = buildSummaryPrompt(fullTranscript, accTasks, accDecisions);
-        console.log(`[Summary] Step 3 — Prompt built. Length: ${prompt.length} chars`);
-        console.log(`[Summary] Prompt preview (first 300 chars):\n${prompt.slice(0, 300)}`);
+        prompt = buildSummaryPrompt(
+          combinedTranscript,
+          accTasks,
+          accDecisions
+        );
+        console.log(
+          `[Summary] Step 3 — Prompt built. Length: ${prompt.length} chars`
+        );
       } catch (promptErr) {
-        console.error("[Summary] ❌ buildSummaryPrompt threw an error:", promptErr);
-        ws.send(JSON.stringify({
-          type: "SUMMARY_ERROR",
-          message: `Prompt build failed: ${promptErr.message}`
-        }));
+        console.error(
+          "[Summary] ❌ buildSummaryPrompt threw:",
+          promptErr
+        );
+        ws.send(
+          JSON.stringify({
+            type: "SUMMARY_ERROR",
+            message: `Prompt build failed: ${promptErr.message}`,
+          })
+        );
         return;
       }
 
-      // ── Step 4: call Gemini ──
-      console.log("[Summary] Step 4 — Calling callGeminiSummary()...");
+      console.log("[Summary] Step 4 — Calling callGeminiSummary()…");
       let result;
       try {
         result = await callGeminiSummary(prompt);
       } catch (llmErr) {
-        console.error("[Summary] ❌ callGeminiSummary threw an unexpected error:");
-        console.error("[Summary]   Name   :", llmErr.name);
-        console.error("[Summary]   Message:", llmErr.message);
-        console.error("[Summary]   Stack  :", llmErr.stack);
-        ws.send(JSON.stringify({
-          type: "SUMMARY_ERROR",
-          message: `LLM call crashed: ${llmErr.message}`
-        }));
+        console.error("[Summary] ❌ callGeminiSummary error:", llmErr.message);
+        ws.send(
+          JSON.stringify({
+            type: "SUMMARY_ERROR",
+            message: `LLM call crashed: ${llmErr.message}`,
+          })
+        );
         return;
       }
 
-      // ── Step 5: handle result ──
       if (result) {
-        console.log("[Summary] ✅ Step 5 — Result received:");
-        console.log(`[Summary]   summary   : ${result.summary?.slice(0, 100)}`);
-        console.log(`[Summary]   tasks     : ${result.tasks?.length ?? 0}`);
-        console.log(`[Summary]   decisions : ${result.decisions?.length ?? 0}`);
-        console.log(`[Summary]   risks     : ${result.risks?.length ?? 0}`);
-        ws.send(JSON.stringify({ type: "SUMMARY_RESULT", payload: result }));
+        console.log("[Summary] ✅ Result received.");
+        ws.send(
+          JSON.stringify({ type: "SUMMARY_RESULT", payload: result })
+        );
       } else {
-        console.error("[Summary] ❌ Step 5 — callGeminiSummary returned null (all models failed).");
-        console.error("[Summary]   Check logs above for [LLM] ❌ lines to see the specific API error.");
-        ws.send(JSON.stringify({
-          type: "SUMMARY_ERROR",
-          message: "AI summary generation failed. Check server console for details."
-        }));
+        console.error(
+          "[Summary] ❌ callGeminiSummary returned null."
+        );
+        ws.send(
+          JSON.stringify({
+            type: "SUMMARY_ERROR",
+            message: "AI summary generation failed. Check server logs.",
+          })
+        );
       }
 
-      console.log("[Summary] ═══════════════ SUMMARY REQUEST END ═══════════════\n");
+      console.log(
+        "[Summary] ═══════════════ SUMMARY REQUEST END ═══════════════\n"
+      );
     }
   });
 
   ws.on("close", () => {
     console.log("[Backend] Client disconnected. Context cleared.");
     ctx.reset();
+    transcriber.reset();
   });
 
   ws.on("error", (err) => {
@@ -169,14 +227,24 @@ wss.on("connection", (ws) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`[Backend] MeetSense server running on ws://localhost:${PORT}`);
+  console.log(
+    `[Backend] MeetSense server running on ws://localhost:${PORT}`
+  );
+  if (transcriber.isConfigured()) {
+    console.log("[Backend] Whisper STT: ✅ configured");
+  } else {
+    console.log(
+      "[Backend] Whisper STT: ⚠️ not configured (set OPENAI_API_KEY in .env for tab-capture transcription)"
+    );
+  }
 });
 
 server.on("error", (err) => {
   if (err.code === "EADDRINUSE") {
     console.error(`\n[Backend] ❌ Port ${PORT} is already in use.`);
-    console.error(`[Backend] 👉 Kill it with:  npx kill-port ${PORT}`);
-    console.error(`[Backend] 👉 Or change PORT in your .env file.\n`);
+    console.error(
+      `[Backend] 👉 Kill it with:  npx kill-port ${PORT}`
+    );
     process.exit(1);
   } else {
     throw err;

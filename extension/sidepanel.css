@@ -1,5 +1,5 @@
 /* ============================================================
-   sidepanel.css — MeetSense AI Side Panel Styles
+   sidepanel.css — MeetSense AI Side Panel Styles (v2)
    ============================================================ */
 
 :root {
@@ -8,7 +8,7 @@
   --surface2:    #273548;
   --border:      #334155;
   --text:        #e2e8f0;
-  --text-muted:  #94a3b8;
+  --text-muted:  #a5b4c8;
   --accent:      #7c3aed;
   --accent-2:    #06b6d4;
   --green:       #10b981;
@@ -30,6 +30,12 @@ body {
   overflow-x: hidden;
 }
 
+/* ── Focus visible (accessibility) ── */
+:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
 /* ── Header ── */
 .header {
   display: flex;
@@ -43,10 +49,65 @@ body {
   z-index: 10;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .logo { display: flex; align-items: center; gap: 7px; }
 .logo-icon { font-size: 18px; }
 .logo-text { font-weight: 700; font-size: 15px; letter-spacing: -0.3px; }
 .logo-accent { color: var(--accent-2); }
+
+/* ── History Button ── */
+.btn-history {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all 0.15s;
+}
+
+.btn-history:hover {
+  color: var(--text);
+  border-color: var(--accent-2);
+  background: var(--border);
+}
+
+.history-icon { font-size: 12px; }
+
+/* ── Save Toast ── */
+.save-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--surface2);
+  border: 1px solid var(--green);
+  color: var(--green);
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 200;
+  opacity: 0;
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.save-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
 
 /* ── WS Badge ── */
 .ws-badge {
@@ -70,7 +131,47 @@ body {
 .ws-badge.connected .ws-dot { background: var(--green); box-shadow: 0 0 5px var(--green); }
 .ws-badge.disconnected .ws-dot { background: var(--red); }
 
-/* ── Banners ── */
+/* ── Speech Status Banner ── */
+.status-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.status-banner.listening {
+  background: rgba(6, 182, 212, 0.08);
+  color: var(--accent-2);
+}
+
+.status-banner.listening .status-banner-icon {
+  animation: micPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.status-banner.error {
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--red);
+}
+
+.status-banner.tabcapture {
+  background: rgba(124, 58, 237, 0.08);
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.status-banner-icon {
+  font-size: 13px;
+}
+
+/* ── Alert Banners ── */
 .alert-banner {
   background: #78350f;
   color: #fde68a;
@@ -138,19 +239,30 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  height: 130px;
+  height: 160px;
   overflow-y: auto;
   padding: 8px 10px;
   scroll-behavior: smooth;
 }
 
 .transcript-line {
-  color: var(--text-muted);
   font-size: 12px;
   margin-bottom: 4px;
   border-left: 2px solid var(--accent);
   padding-left: 6px;
   animation: fadeIn 0.2s ease;
+}
+
+.transcript-line.final {
+  color: var(--text);
+  border-left-color: var(--accent);
+}
+
+.transcript-line.interim {
+  color: var(--text-muted);
+  border-left-color: var(--accent-2);
+  font-style: italic;
+  opacity: 0.7;
 }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
@@ -353,6 +465,7 @@ body {
 .summary-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* ── Meet Inactive Overlay ── */

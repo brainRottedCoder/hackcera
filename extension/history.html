@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MeetSense AI — Meeting History</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="history.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <div class="header-left">
+      <button id="btn-back" class="btn-back" aria-label="Back to live session">
+        ← Back
+      </button>
+      <div class="logo">
+        <span class="logo-icon">🧠</span>
+        <span class="logo-text">Meeting History</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <button id="btn-clear-all" class="btn-ghost-sm">Clear All</button>
+    </div>
+  </header>
+
+  <!-- ── Search ── -->
+  <div class="search-bar">
+    <input id="search-input" type="search" placeholder="Search meetings…" aria-label="Search meeting history" />
+  </div>
+
+  <!-- ── Meeting List View ── -->
+  <main id="list-view" class="list-view" role="list" aria-label="Meeting history list">
+    <div id="empty-state" class="empty-history">
+      <div class="empty-history-icon">📁</div>
+      <h3>No Meetings Yet</h3>
+      <p>Your past meeting transcripts and summaries will appear here after each session ends.</p>
+    </div>
+  </main>
+
+  <!-- ── Detail View (hidden by default) ── -->
+  <div id="detail-view" class="detail-view hidden" role="article">
+    <div class="detail-header">
+      <button id="btn-detail-back" class="btn-back" aria-label="Back to meeting list">
+        ← All Meetings
+      </button>
+      <h2 id="detail-date" class="detail-date"></h2>
+      <div class="detail-meta">
+        <span id="detail-duration" class="badge"></span>
+        <span id="detail-lines" class="badge"></span>
+      </div>
+    </div>
+
+    <!-- Summary Card -->
+    <section class="detail-card" id="detail-summary-section">
+      <h3>📄 Summary</h3>
+      <p id="detail-summary-text"></p>
+    </section>
+
+    <!-- Tasks Card -->
+    <section class="detail-card" id="detail-tasks-section">
+      <h3>✅ Tasks</h3>
+      <table class="task-table">
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Owner</th>
+            <th>Deadline</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="detail-task-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Decisions Card -->
+    <section class="detail-card" id="detail-decisions-section">
+      <h3>🟡 Decisions</h3>
+      <ul id="detail-decisions-list" class="insight-list"></ul>
+    </section>
+
+    <!-- Risks Card -->
+    <section class="detail-card" id="detail-risks-section">
+      <h3>🔴 Risks</h3>
+      <ul id="detail-risks-list" class="insight-list"></ul>
+    </section>
+
+    <!-- Full Transcript Card -->
+    <section class="detail-card">
+      <div class="section-header-row">
+        <h3>🎙️ Full Transcript</h3>
+        <button id="btn-copy-transcript" class="btn-ghost-sm">📋 Copy</button>
+      </div>
+      <div id="detail-transcript" class="transcript-box" role="log" aria-label="Meeting transcript"></div>
+    </section>
+
+    <!-- Actions -->
+    <div class="detail-actions">
+      <button id="btn-copy-json" class="btn-secondary">📋 Copy Full JSON</button>
+      <button id="btn-copy-md" class="btn-secondary">📝 Copy Markdown</button>
+      <button id="btn-delete-meeting" class="btn-ghost-sm btn-danger">🗑️ Delete Meeting</button>
+    </div>
+  </div>
+
+  <script src="history.js"></script>
+</body>
+</html>

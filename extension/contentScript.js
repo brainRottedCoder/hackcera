@@ -1,160 +1,226 @@
 // ============================================================
-// contentScript.js — Caption Scraper + Local Storage Writer
-// Runs inside the Google Meet tab.
+// contentScript.js — Real-Time Speech Transcription
 //
-// Uses MutationObserver (zero-latency) + setInterval fallback.
-// Tries multiple selectors since Google Meet's DOM changes often.
+// Uses the Chrome Web Speech API (webkitSpeechRecognition)
+// to auto-transcribe meeting audio from the microphone.
+// Provides both interim (live) and final transcription results.
+//
+// Also detects Meet page readiness and notifies the background
+// service worker so it can start tab capture.
 // ============================================================
 
-let lastCaption = "";
-let captionMissSeconds = 0;
-const HEALTH_MISS_LIMIT = 20; // warn after 20s of no captions found
+const SpeechRecognition =
+  window.SpeechRecognition || window.webkitSpeechRecognition;
 
-// ── All known Google Meet caption selectors (2024-2026) ──
-const CAPTION_SELECTORS = [
-  // Most common: the main caption text block
-  '[jsname="YSxPC"]',
-  '[jsname="tgaKEf"]',
+let recognition = null;
+let isListening = false;
+let retryCount = 0;
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 3000;
 
-  // Caption container spans
-  '.a4cQT',
-  '.CNusmb',
-  '.CNusmb span',
-  '.iOAmFf',
+// ── Transcription State ──
+let sessionTranscript = [];
 
-  // Aria-live regions (broadest fallback)
-  '[aria-live="polite"]',
-  '[aria-live="assertive"]',
-
-  // Text content blocks inside subtitles panel
-  '.TBMuR',
-  '.bj2sDe',
-];
-
-function readCaptionText() {
-  for (const sel of CAPTION_SELECTORS) {
-    try {
-      const el = document.querySelector(sel);
-      const text = el?.innerText?.trim() || el?.textContent?.trim();
-      if (text && text.length > 2) return text;
-    } catch (_) {}
-  }
-  return null;
-}
-
-// ── Process a new caption string  ──
-async function processCaption(text) {
-  if (!text || text === lastCaption) return;
-
-  if (lastCaption && lastCaption.length > 10 && text.startsWith(lastCaption.slice(0, -5))) {
-    lastCaption = text;
+function initSpeechRecognition() {
+  if (!SpeechRecognition) {
+    console.error(
+      "[MeetSense] Web Speech API not supported in this browser."
+    );
+    chrome.runtime.sendMessage({
+      type: "SPEECH_API_NOT_SUPPORTED",
+    });
     return;
   }
 
-  lastCaption = text;
-  captionMissSeconds = 0;
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = "en-US";
+  recognition.maxAlternatives = 1;
 
-  const chunk = { text, timestamp: Date.now() };
+  recognition.onstart = () => {
+    isListening = true;
+    retryCount = 0;
+    console.log("[MeetSense] Speech recognition started.");
+    chrome.runtime.sendMessage({ type: "SPEECH_STATUS", status: "listening" });
+  };
 
-  // Save to chrome.storage.local (TRACK A — always-on transcript buffer)
-  const result = await chrome.storage.local.get(["transcriptLog"]);
-  const log    = result.transcriptLog || [];
-  log.push(chunk);
-  if (log.length > 2000) log.splice(0, log.length - 2000); // rolling cap
-  await chrome.storage.local.set({ transcriptLog: log });
+  recognition.onresult = (event) => {
+    let interimText = "";
+    let finalText = "";
 
-  // Forward to side panel for live display
-  chrome.runtime.sendMessage({ type: "NEW_CAPTION", payload: chunk });
-}
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      const isFinal = event.results[i].isFinal;
 
-// ══════════════════════════════════════════════════════════
-// MutationObserver — watches for DOM changes in caption area
-// More reliable than setInterval; fires instantly on change
-// ══════════════════════════════════════════════════════════
-
-let observer = null;
-
-function startObserver() {
-  if (observer) return;
-
-  observer = new MutationObserver(() => {
-    const text = readCaptionText();
-    if (text) processCaption(text);
-  });
-
-  // Observe the whole subtitles region if we can find it, else observe body
-  const subtitleRoot =
-    document.querySelector('[data-subtitle-container]') ||
-    document.querySelector('.aJgDEd') ||   // subtitle region div
-    document.querySelector('.crqnQb') ||   // another known container
-    document.body;
-
-  observer.observe(subtitleRoot, {
-    childList:     true,
-    subtree:       true,
-    characterData: true,
-  });
-
-  console.log("[MeetSense] MutationObserver attached to:", subtitleRoot.tagName || "body");
-}
-
-// ══════════════════════════════════════════════════════════
-// setInterval fallback — health check + catches edge cases
-// ══════════════════════════════════════════════════════════
-
-let healthInterval = null;
-
-function startHealthCheck() {
-  if (healthInterval) return;
-
-  healthInterval = setInterval(() => {
-    const text = readCaptionText();
-
-    if (text) {
-      processCaption(text); // catches anything observer might miss
-      captionMissSeconds = 0;
-    } else {
-      captionMissSeconds++;
-      if (captionMissSeconds >= HEALTH_MISS_LIMIT) {
-        captionMissSeconds = 0; // reset so it doesn't spam
-        chrome.runtime.sendMessage({ type: "CAPTIONS_MISSING" });
+      if (isFinal) {
+        finalText += transcript + " ";
+      } else {
+        interimText += transcript;
       }
     }
-  }, 1000);
+
+    if (interimText.trim()) {
+      chrome.runtime.sendMessage({
+        type: "NEW_TRANSCRIPTION",
+        payload: {
+          text: interimText.trim(),
+          isFinal: false,
+          timestamp: Date.now(),
+        },
+      });
+    }
+
+    if (finalText.trim()) {
+      const chunk = {
+        text: finalText.trim(),
+        isFinal: true,
+        timestamp: Date.now(),
+      };
+
+      sessionTranscript.push(chunk);
+
+      chrome.runtime.sendMessage({
+        type: "NEW_TRANSCRIPTION",
+        payload: chunk,
+      });
+
+      // Also persist to chrome.storage for summary generation
+      persistTranscript(chunk);
+    }
+  };
+
+  recognition.onerror = (event) => {
+    console.warn("[MeetSense] Speech recognition error:", event.error);
+
+    switch (event.error) {
+      case "no-speech":
+        break;
+
+      case "aborted":
+        isListening = false;
+        break;
+
+      case "not-allowed":
+        isListening = false;
+        chrome.runtime.sendMessage({
+          type: "SPEECH_STATUS",
+          status: "mic-denied",
+        });
+        return;
+
+      case "network":
+        if (retryCount < MAX_RETRIES) {
+          retryCount++;
+          setTimeout(() => startListening(), RETRY_DELAY_MS);
+        }
+        chrome.runtime.sendMessage({
+          type: "SPEECH_STATUS",
+          status: "error",
+          error: "Network error — transcription will retry.",
+        });
+        return;
+
+      default:
+        if (retryCount < MAX_RETRIES) {
+          retryCount++;
+          setTimeout(() => startListening(), RETRY_DELAY_MS);
+        }
+        chrome.runtime.sendMessage({
+          type: "SPEECH_STATUS",
+          status: "error",
+          error: `Speech error: ${event.error}`,
+        });
+        return;
+    }
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    // Auto-restart: SpeechRecognition stops after silence,
+    // so we restart it to keep continuous transcription
+    if (retryCount < MAX_RETRIES) {
+      setTimeout(() => {
+        startListening();
+      }, 300);
+    }
+  };
 }
 
-// ══════════════════════════════════════════════════════════
-// Wait for Meet to fully load before attaching observer
-// (DOM may not be ready immediately on injection)
-// ══════════════════════════════════════════════════════════
+function startListening() {
+  if (!recognition) return;
+  if (isListening) return;
 
+  try {
+    recognition.start();
+  } catch (e) {
+    // "already started" — safe to ignore
+    if (!e.message?.includes("already started")) {
+      console.warn("[MeetSense] Start error:", e.message);
+    }
+  }
+}
+
+function stopListening() {
+  if (!recognition) return;
+  try {
+    recognition.stop();
+  } catch (_) {}
+  isListening = false;
+}
+
+async function persistTranscript(chunk) {
+  const result = await chrome.storage.local.get(["transcriptLog"]);
+  const log = result.transcriptLog || [];
+  log.push(chunk);
+  if (log.length > 2000) log.splice(0, log.length - 2000);
+  await chrome.storage.local.set({ transcriptLog: log });
+}
+
+// ── Meet Page Readiness Detection ──
 function waitForMeetLoad(retries = 30) {
-  // Check if the Meet call UI is loaded (look for known Meet elements)
   const loadIndicators = [
-    '[data-call-ended]',
-    '[data-allocation-index]',
-    '.crqnQb',
-    '.Tmb7Fd',  // control bar
+    "[data-call-ended]",
+    "[data-allocation-index]",
+    ".crqnQb",
+    ".Tmb7Fd",
     '[jscontroller="LcYFW"]',
   ];
 
-  const meetLoaded = loadIndicators.some(sel => document.querySelector(sel));
+  const meetLoaded = loadIndicators.some((sel) =>
+    document.querySelector(sel)
+  );
 
   if (meetLoaded || retries <= 0) {
-    console.log("[MeetSense] Meet UI detected. Starting caption observer.");
-    startObserver();
-    startHealthCheck();
+    console.log("[MeetSense] Meet UI detected. Starting transcription.");
+    initSpeechRecognition();
+    startListening();
     chrome.runtime.sendMessage({ type: "CONTENT_SCRIPT_READY" });
   } else {
     setTimeout(() => waitForMeetLoad(retries - 1), 1000);
   }
 }
 
-// ══════════════════════════════════════════════════════════
-// Boot
-// ══════════════════════════════════════════════════════════
+// ── Message handler from background ──
+chrome.runtime.onMessage.addListener((msg) => {
+  switch (msg.type) {
+    case "START_TRANSCRIPTION":
+      if (!recognition) initSpeechRecognition();
+      startListening();
+      break;
 
-// Also handle the case where Meet is already loaded (extension reload)
+    case "STOP_TRANSCRIPTION":
+      stopListening();
+      break;
+
+    case "CLEAR_TRANSCRIPT":
+      sessionTranscript = [];
+      chrome.storage.local.set({ transcriptLog: [] });
+      break;
+  }
+});
+
+// ── Boot ──
 if (document.readyState === "complete") {
   waitForMeetLoad();
 } else {

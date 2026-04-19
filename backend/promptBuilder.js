@@ -44,13 +44,10 @@ Extract ONLY NEW items explicitly discussed in the transcript above:
 // ── TRACK C: Full meeting summary prompt ──
 // Heavier prompt — called once manually by user
 function buildSummaryPrompt(fullTranscript, allTasks = [], allDecisions = []) {
-  // For summary, allow up to 12,000 chars (larger context window)
-  const cappedTranscript = fullTranscript.slice(-12000);
-
   return `You are an expert AI meeting analyst. The user has just finished a meeting and wants a comprehensive summary.
 
 ## Full Meeting Transcript:
-${cappedTranscript}
+${fullTranscript}
 
 ## Previously Auto-Extracted Items (include and verify these):
 Tasks: ${JSON.stringify(allTasks)}

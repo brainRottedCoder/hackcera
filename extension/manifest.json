@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "MeetSense AI",
-  "version": "1.0.0",
-  "description": "Real-time meeting intelligence — tasks, decisions, and risks extracted live.",
+  "version": "2.0.0",
+  "description": "Real-time meeting intelligence — auto-transcribe, extract tasks, decisions, and risks live.",
 
   "permissions": [
     "tabs",
@@ -10,7 +10,9 @@
     "scripting",
     "sidePanel",
     "storage",
-    "alarms"
+    "alarms",
+    "tabCapture",
+    "offscreen"
   ],
 
   "host_permissions": [
@@ -42,5 +44,12 @@
 
   "action": {
     "default_title": "Open MeetSense AI"
-  }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["history.html", "history.css", "history.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

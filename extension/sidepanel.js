@@ -1,45 +1,69 @@
 // ============================================================
-// sidepanel.js — UI Logic
+// sidepanel.js — UI Logic (v2 — Auto-Transcription)
 //
-// Listens to messages from background.js and updates DOM.
-// Handles: Live transcript, AI insights, manual summary button.
+// Handles: Live transcription (interim + final),
+// AI insights, manual summary, tab capture status.
 // ============================================================
 
-// ── State ──
-let allTasks        = [];    // deduplicated accumulated task list
-let lastSummary     = null;  // last generated summary for export
+let allTasks = [];
+let lastSummary = null;
 let transcriptCount = 0;
-let meetActive      = false; // track whether Meet tab is open
+let meetActive = false;
+let currentInterimEl = null;
 
-// ── DOM refs ──
-const transcriptFeed   = document.getElementById("transcript-feed");
+const transcriptFeed = document.getElementById("transcript-feed");
 const transcriptCount_ = document.getElementById("transcript-count");
-const taskTbody        = document.getElementById("task-tbody");
-const decisionsList    = document.getElementById("decisions-list");
-const risksList        = document.getElementById("risks-list");
-const processingDot    = document.getElementById("processing-dot");
-const captionsBanner   = document.getElementById("captions-banner");
-const wsBadge          = document.getElementById("ws-indicator");
-const wsLabel          = document.getElementById("ws-label");
-const btnSummary       = document.getElementById("btn-summary");
-const btnSummaryLabel  = document.getElementById("btn-summary-label");
-const summaryOutput    = document.getElementById("summary-output");
-const summaryError     = document.getElementById("summary-error");
-const btnCopy          = document.getElementById("btn-copy");
-const btnClear         = document.getElementById("btn-clear");
+const taskTbody = document.getElementById("task-tbody");
+const decisionsList = document.getElementById("decisions-list");
+const risksList = document.getElementById("risks-list");
+const processingDot = document.getElementById("processing-dot");
+const wsBadge = document.getElementById("ws-indicator");
+const wsLabel = document.getElementById("ws-label");
+const btnSummary = document.getElementById("btn-summary");
+const btnSummaryLabel = document.getElementById("btn-summary-label");
+const summaryOutput = document.getElementById("summary-output");
+const summaryError = document.getElementById("summary-error");
+const btnCopy = document.getElementById("btn-copy");
+const btnCopyMd = document.getElementById("btn-copy-md");
+const btnSaveMeeting = document.getElementById("btn-save-meeting");
+const btnClear = document.getElementById("btn-clear");
+const btnHistory = document.getElementById("btn-history");
+const speechBanner = document.getElementById("speech-banner");
+const speechBannerIcon = document.getElementById("speech-banner-icon");
+const speechBannerText = document.getElementById("speech-banner-text");
+const tabcaptureBanner = document.getElementById("tabcapture-banner");
+const tabcaptureBannerText = document.getElementById("tabcapture-banner-text");
+const micDeniedBanner = document.getElementById("mic-denied-banner");
+const speechApiBanner = document.getElementById("speech-api-banner");
 
 // ──────────────────────────────────────────
 // 1. Message listener from background.js
 // ──────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
-
     case "MEET_STATUS":
       updateMeetStatus(msg.active);
       break;
 
-    case "CAPTION_DISPLAY":
-      if (meetActive) appendTranscript(msg.payload.text);
+    case "TRANSCRIPTION_DISPLAY":
+      if (meetActive) appendTranscription(msg.payload);
+      break;
+
+    case "TRANSCRIPTION_RESULT":
+      if (msg.payload?.text) appendTranscription(msg.payload);
+      break;
+
+    case "SPEECH_STATUS":
+      updateSpeechBanner(msg.status, msg.error);
+      break;
+
+    case "SPEECH_API_NOT_SUPPORTED":
+      speechApiBanner.classList.remove("hidden");
+      speechBanner.classList.add("hidden");
+      break;
+
+    case "TAB_CAPTURE_STATUS":
+      updateTabCaptureBanner(msg.active, msg.error);
       break;
 
     case "INSIGHTS_UPDATE":
@@ -70,10 +94,6 @@ chrome.runtime.onMessage.addListener((msg) => {
       showSummaryError(msg.message || "Unknown error occurred.");
       break;
 
-    case "CAPTIONS_MISSING":
-      captionsBanner.classList.remove("hidden");
-      break;
-
     case "WS_STATUS":
       updateWSBadge(msg.status);
       break;
@@ -81,64 +101,129 @@ chrome.runtime.onMessage.addListener((msg) => {
     case "SESSION_CLEARED":
       resetUI();
       break;
+
+    case "MEETING_SAVED":
+      showSaveToast();
+      break;
   }
 });
 
-// Ask background for current status as soon as panel opens
 chrome.runtime.sendMessage({ type: "GET_MEET_STATUS" });
 
 // ──────────────────────────────────────────
-// 2. Live Transcript
+// 2. Live Transcription Display
 // ──────────────────────────────────────────
-function appendTranscript(text) {
-  // Remove empty state placeholder
+function appendTranscription(payload) {
+  const { text, isFinal } = payload;
+  if (!text) return;
+
   const empty = transcriptFeed.querySelector(".empty-state");
   if (empty) empty.remove();
 
-  transcriptCount++;
-  transcriptCount_.textContent = `${transcriptCount} lines`;
+  if (isFinal) {
+    // Finalize any pending interim line
+    if (currentInterimEl) {
+      currentInterimEl.remove();
+      currentInterimEl = null;
+    }
 
-  const line = document.createElement("p");
-  line.className = "transcript-line";
-  line.textContent = text;
+    transcriptCount++;
+    transcriptCount_.textContent = `${transcriptCount} lines`;
 
-  transcriptFeed.appendChild(line);
+    const line = document.createElement("p");
+    line.className = "transcript-line final";
+    line.textContent = text;
+    transcriptFeed.appendChild(line);
 
-  // Auto-scroll to bottom
+    const lines = transcriptFeed.querySelectorAll(".transcript-line");
+    if (lines.length > 150) lines[0].remove();
+  } else {
+    // Interim — show live preview
+    if (!currentInterimEl) {
+      currentInterimEl = document.createElement("p");
+      currentInterimEl.className = "transcript-line interim";
+      transcriptFeed.appendChild(currentInterimEl);
+    }
+    currentInterimEl.textContent = text;
+  }
+
   transcriptFeed.scrollTop = transcriptFeed.scrollHeight;
-
-  // Cap displayed lines to 100 to keep DOM light (storage has full log)
-  const lines = transcriptFeed.querySelectorAll(".transcript-line");
-  if (lines.length > 100) lines[0].remove();
 }
 
 // ──────────────────────────────────────────
-// 3. AI Insights Update (every 12s from backend)
+// 3. Speech Status Banner
+// ──────────────────────────────────────────
+function updateSpeechBanner(status, error) {
+  speechBanner.classList.remove("listening", "error", "inactive");
+
+  switch (status) {
+    case "listening":
+      speechBannerIcon.textContent = "🎤";
+      speechBannerText.textContent = "Listening for speech…";
+      speechBanner.classList.add("listening");
+      micDeniedBanner.classList.add("hidden");
+      break;
+
+    case "mic-denied":
+      speechBannerIcon.textContent = "🚫";
+      speechBannerText.textContent = "Microphone access denied";
+      speechBanner.classList.add("error");
+      micDeniedBanner.classList.remove("hidden");
+      break;
+
+    case "error":
+      speechBannerIcon.textContent = "⚠️";
+      speechBannerText.textContent = error || "Transcription error";
+      speechBanner.classList.add("error");
+      break;
+
+    default:
+      break;
+  }
+}
+
+function updateTabCaptureBanner(active, error) {
+  if (active) {
+    tabcaptureBanner.classList.remove("hidden");
+    tabcaptureBannerText.textContent = "Tab audio captured for STT";
+  } else if (error) {
+    tabcaptureBanner.classList.remove("hidden");
+    tabcaptureBannerText.textContent = `Tab capture: ${error}`;
+  } else {
+    tabcaptureBanner.classList.add("hidden");
+  }
+}
+
+// ──────────────────────────────────────────
+// 4. AI Insights Update
 // ──────────────────────────────────────────
 function updateInsights({ tasks, decisions, risks }) {
-  if (tasks?.length)     updateTasks(tasks);
-  if (decisions?.length) updateList(decisionsList, decisions, "decision-item");
-  if (risks?.length)     updateList(risksList, risks, "risk-item");
+  if (tasks?.length) updateTasks(tasks);
+  if (decisions?.length)
+    updateList(decisionsList, decisions, "decision-item");
+  if (risks?.length) updateList(risksList, risks, "risk-item");
 }
 
 function updateTasks(newTasks) {
-  newTasks.forEach(newTask => {
-    const existing = allTasks.findIndex(t => t.task === newTask.task);
+  newTasks.forEach((newTask) => {
+    const existing = allTasks.findIndex((t) => t.task === newTask.task);
     if (existing === -1) {
       allTasks.push({ ...newTask, status: "Pending" });
       addTaskRow(newTask);
     } else {
-      // Update existing row in place (no re-render flicker)
       allTasks[existing] = { ...allTasks[existing], ...newTask };
-      const row = taskTbody.querySelector(`[data-task="${CSS.escape(newTask.task)}"]`);
+      const row = taskTbody.querySelector(
+        `[data-task="${CSS.escape(newTask.task)}"]`
+      );
       if (row) {
-        row.querySelector(".cell-owner").textContent    = newTask.owner    || "Unassigned";
-        row.querySelector(".cell-deadline").textContent = newTask.deadline || "TBD";
+        row.querySelector(".cell-owner").textContent =
+          newTask.owner || "Unassigned";
+        row.querySelector(".cell-deadline").textContent =
+          newTask.deadline || "TBD";
       }
     }
   });
 
-  // Remove empty-row placeholder if tasks exist
   const emptyRow = taskTbody.querySelector(".empty-row");
   if (emptyRow && allTasks.length > 0) emptyRow.remove();
 }
@@ -151,15 +236,13 @@ function addTaskRow(task) {
     <td class="cell-owner">${sanitize(task.owner || "Unassigned")}</td>
     <td class="cell-deadline">${sanitize(task.deadline || "TBD")}</td>
     <td>
-      <select class="status-select" onchange="cycleStatus(this)">
-        <option value="Pending"     ${task.status === "Pending"     ? "selected" : ""}>🔵 Pending</option>
-        <option value="In Progress" ${task.status === "In Progress" ? "selected" : ""}>🟡 In Progress</option>
-        <option value="Done"        ${task.status === "Done"        ? "selected" : ""}>🟢 Done</option>
+      <select class="status-select" aria-label="Task status for ${sanitize(task.task)}" onchange="cycleStatus(this)">
+        <option value="Pending"     ${task.status === "Pending" ? "selected" : ""}>Pending</option>
+        <option value="In Progress" ${task.status === "In Progress" ? "selected" : ""}>In Progress</option>
+        <option value="Done"        ${task.status === "Done" ? "selected" : ""}>Done</option>
       </select>
     </td>`;
   taskTbody.appendChild(tr);
-
-  // Flash animation for new row
   tr.classList.add("row-flash");
   setTimeout(() => tr.classList.remove("row-flash"), 800);
 }
@@ -168,10 +251,9 @@ function updateList(el, items, className) {
   const empty = el.querySelector(".empty-state");
   if (empty) empty.remove();
 
-  items.forEach(item => {
-    // Avoid duplicates
+  items.forEach((item) => {
     const existing = [...el.querySelectorAll("li")].find(
-      li => li.dataset.key === item
+      (li) => li.dataset.key === item
     );
     if (existing) return;
 
@@ -183,28 +265,63 @@ function updateList(el, items, className) {
   });
 }
 
-// Status dropdown handler (inline)
-window.cycleStatus = function(select) {
+window.cycleStatus = function (select) {
   const taskText = select.closest("tr").dataset.task;
-  const task = allTasks.find(t => t.task === taskText);
+  const task = allTasks.find((t) => t.task === taskText);
   if (task) task.status = select.value;
 };
 
 // ──────────────────────────────────────────
-// 4. Tab Switching
+// 5. Tab Switching (WAI-ARIA compliant)
 // ──────────────────────────────────────────
-document.querySelectorAll(".tab-btn").forEach(btn => {
+document.querySelectorAll(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach(c => c.classList.add("hidden"));
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      b.classList.remove("active");
+      b.setAttribute("aria-selected", "false");
+    });
+    document
+      .querySelectorAll(".tab-content")
+      .forEach((c) => c.classList.add("hidden"));
 
     btn.classList.add("active");
-    document.getElementById(`tab-${btn.dataset.tab}`).classList.remove("hidden");
+    btn.setAttribute("aria-selected", "true");
+    document
+      .getElementById(`tab-${btn.dataset.tab}`)
+      .classList.remove("hidden");
   });
 });
 
+// Keyboard navigation for tabs
+document.querySelector(".tab-bar").addEventListener("keydown", (e) => {
+  const tabs = [...document.querySelectorAll(".tab-btn")];
+  const currentIndex = tabs.indexOf(document.activeElement);
+  let newIndex;
+
+  switch (e.key) {
+    case "ArrowRight":
+      newIndex = (currentIndex + 1) % tabs.length;
+      break;
+    case "ArrowLeft":
+      newIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      break;
+    case "Home":
+      newIndex = 0;
+      break;
+    case "End":
+      newIndex = tabs.length - 1;
+      break;
+    default:
+      return;
+  }
+
+  e.preventDefault();
+  tabs[newIndex].focus();
+  tabs[newIndex].click();
+});
+
 // ──────────────────────────────────────────
-// 5. Manual Summary Button — TRACK C
+// 6. Manual Summary Button
 // ──────────────────────────────────────────
 btnSummary.addEventListener("click", () => {
   summaryError.classList.add("hidden");
@@ -214,17 +331,24 @@ btnSummary.addEventListener("click", () => {
 function setSummaryLoading(loading) {
   btnSummary.disabled = loading;
   btnSummaryLabel.textContent = loading ? "Generating…" : "Generate Summary";
-  document.getElementById("btn-summary-icon").textContent = loading ? "⏳" : "✨";
+  document.getElementById("btn-summary-icon").textContent = loading
+    ? "⏳"
+    : "✨";
 }
 
 function renderSummary({ summary, tasks, decisions, risks }) {
   lastSummary = { summary, tasks, decisions, risks };
 
-  document.getElementById("summary-text").textContent = summary || "No summary available.";
+  document.getElementById("summary-text").textContent =
+    summary || "No summary available.";
 
-  renderSummaryList("summary-tasks",     tasks,     t => `${t.task} → ${t.owner || "?"} by ${t.deadline || "TBD"}`);
-  renderSummaryList("summary-decisions", decisions, d => d);
-  renderSummaryList("summary-risks",     risks,     r => r);
+  renderSummaryList(
+    "summary-tasks",
+    tasks,
+    (t) => `${t.task} → ${t.owner || "?"} by ${t.deadline || "TBD"}`
+  );
+  renderSummaryList("summary-decisions", decisions, (d) => d);
+  renderSummaryList("summary-risks", risks, (r) => r);
 
   summaryOutput.classList.remove("hidden");
   summaryOutput.scrollIntoView({ behavior: "smooth" });
@@ -237,7 +361,7 @@ function renderSummaryList(elId, items, formatter) {
     el.innerHTML = "<li class='empty-state'>None recorded.</li>";
     return;
   }
-  items.forEach(item => {
+  items.forEach((item) => {
     const li = document.createElement("li");
     li.textContent = formatter(item);
     el.appendChild(li);
@@ -250,7 +374,7 @@ function showSummaryError(message) {
 }
 
 // ──────────────────────────────────────────
-// 6. Export + Clear
+// 7. Export + Clear
 // ──────────────────────────────────────────
 btnCopy.addEventListener("click", () => {
   if (!lastSummary) return;
@@ -261,14 +385,78 @@ btnCopy.addEventListener("click", () => {
   });
 });
 
+btnCopyMd.addEventListener("click", () => {
+  if (!lastSummary) return;
+  const md = summaryToMarkdown(lastSummary);
+  navigator.clipboard.writeText(md).then(() => {
+    btnCopyMd.textContent = "✅ Copied!";
+    setTimeout(() => (btnCopyMd.textContent = "📝 Copy Markdown"), 2000);
+  });
+});
+
+function summaryToMarkdown(data) {
+  let md = `# Meeting Summary\n\n`;
+  md += `${data.summary || ""}\n\n`;
+  if (data.tasks?.length) {
+    md += `## Tasks\n`;
+    data.tasks.forEach(
+      (t) =>
+        (md += `- [ ] **${t.task}** — ${t.owner || "Unassigned"} — ${t.deadline || "TBD"}\n`)
+    );
+    md += "\n";
+  }
+  if (data.decisions?.length) {
+    md += `## Decisions\n`;
+    data.decisions.forEach((d) => (md += `- ${d}\n"));
+    md += "\n";
+  }
+  if (data.risks?.length) {
+    md += `## Risks\n`;
+    data.risks.forEach((r) => (md += `- ${r}\n`));
+  }
+  return md;
+}
+
 btnClear.addEventListener("click", () => {
-  if (confirm("Clear all transcript and session data?")) {
+  if (confirm("Clear all transcription and session data?")) {
     chrome.runtime.sendMessage({ type: "CLEAR_SESSION" });
   }
 });
 
 // ──────────────────────────────────────────
-// 7. Meet Active / Inactive Status
+// 7b. Save Meeting + History Navigation
+// ──────────────────────────────────────────
+btnSaveMeeting.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "SAVE_MEETING" });
+});
+
+function showSaveToast() {
+  let toast = document.getElementById("save-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "save-toast";
+    toast.className = "save-toast";
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
+    toast.textContent = "✅ Meeting saved to history!";
+    document.body.appendChild(toast);
+  }
+  toast.classList.remove("hidden");
+  toast.classList.add("show");
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.classList.add("hidden"), 300);
+  }, 2500);
+}
+
+btnHistory.addEventListener("click", () => {
+  chrome.tabs.create({
+    url: chrome.runtime.getURL("history.html"),
+  });
+});
+
+// ──────────────────────────────────────────
+// 8. Meet Active / Inactive Status
 // ──────────────────────────────────────────
 function updateMeetStatus(active) {
   meetActive = active;
@@ -308,17 +496,23 @@ function showInsightsError(message) {
     banner = document.createElement("div");
     banner.id = "insights-error-banner";
     banner.className = "error-banner";
-    const section = document.querySelector(".section:nth-child(3)");
+    banner.setAttribute("role", "alert");
+    const section = document.querySelector(
+      '[aria-labelledby="insights-title"]'
+    );
     if (section) section.insertBefore(banner, section.firstChild.nextSibling);
   }
   banner.textContent = `⚠️ ${message}`;
   banner.classList.remove("hidden");
   clearTimeout(insightsErrorTimer);
-  insightsErrorTimer = setTimeout(() => banner.classList.add("hidden"), 10000);
+  insightsErrorTimer = setTimeout(
+    () => banner.classList.add("hidden"),
+    10000
+  );
 }
 
 // ──────────────────────────────────────────
-// 8. WebSocket Status Badge
+// 9. WebSocket Status Badge
 // ──────────────────────────────────────────
 function updateWSBadge(status) {
   wsBadge.className = `ws-badge ${status}`;
@@ -326,11 +520,11 @@ function updateWSBadge(status) {
 }
 
 // ──────────────────────────────────────────
-// 8. Helpers
+// 10. Helpers
 // ──────────────────────────────────────────
 function sanitize(str) {
   const div = document.createElement("div");
-  div.textContent = str; // uses textContent → XSS safe
+  div.textContent = str;
   return div.innerHTML;
 }
 
@@ -338,7 +532,8 @@ function resetUI() {
   allTasks = [];
   lastSummary = null;
   transcriptCount = 0;
-  transcriptFeed.innerHTML = `<p class="empty-state">Waiting for captions…</p>`;
+  currentInterimEl = null;
+  transcriptFeed.innerHTML = `<p class="empty-state">Waiting for speech…</p>`;
   taskTbody.innerHTML = `<tr class="empty-row"><td colspan="4">No tasks extracted yet.</td></tr>`;
   decisionsList.innerHTML = `<li class="empty-state">No decisions captured yet.</li>`;
   risksList.innerHTML = `<li class="empty-state">No risks flagged yet.</li>`;
