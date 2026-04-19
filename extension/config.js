@@ -14,9 +14,19 @@
 // ── Set this to your deployed backend URL after deploying ──
 // Example: "wss://meetsense-ai.railway.app"
 // Leave as empty string to use localhost during development.
-const DEPLOYMENT_WS_URL = "";
+const DEPLOYMENT_WS_URL = "https://hackcera.onrender.com";
 
 const LOCAL_WS_URL = "ws://localhost:3001";
+
+/**
+ * Auto-corrects http/https to ws/wss for WebSocket usage.
+ */
+function normalizeWsUrl(url) {
+  if (!url) return url;
+  if (url.startsWith("http://"))  return url.replace("http://", "ws://");
+  if (url.startsWith("https://")) return url.replace("https://", "wss://");
+  return url;
+}
 
 /**
  * Returns the WebSocket backend URL.
@@ -24,20 +34,22 @@ const LOCAL_WS_URL = "ws://localhost:3001";
  * reloading the extension.
  * @returns {Promise<string>}
  */
-async function getBackendUrl() {
+export async function getBackendUrl() {
   try {
     const result = await chrome.storage.sync.get(["backendUrl"]);
     if (result.backendUrl && result.backendUrl.trim()) {
-      console.log("[Config] Using stored backend URL:", result.backendUrl);
-      return result.backendUrl.trim();
+      const url = normalizeWsUrl(result.backendUrl.trim());
+      console.log("[Config] Using stored backend URL:", url);
+      return url;
     }
   } catch (e) {
     // storage.sync unavailable (e.g. in tests)
   }
 
   if (DEPLOYMENT_WS_URL) {
-    console.log("[Config] Using deployment URL:", DEPLOYMENT_WS_URL);
-    return DEPLOYMENT_WS_URL;
+    const url = normalizeWsUrl(DEPLOYMENT_WS_URL);
+    console.log("[Config] Using deployment URL:", url);
+    return url;
   }
 
   console.log("[Config] Using local dev URL:", LOCAL_WS_URL);

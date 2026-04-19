@@ -10,6 +10,8 @@
 // end so users can browse past meetings in the History page.
 // ============================================================
 
+import { getBackendUrl } from './config.js';
+
 const MEET_PATTERN = "https://meet.google.com/*";
 const MEET_ORIGIN = "meet.google.com";
 const MAX_HISTORY = 50;
@@ -55,7 +57,8 @@ function onMeetOpened(tabId) {
   sessionInsights = { tasks: [], decisions: [], risks: [] };
   sessionSummary = null;
   connectWebSocket();
-  startTabCapture(tabId);
+  // Tab capture is started from chrome.action.onClicked (requires user gesture).
+  // See the action listener below.
   broadcastToPanel({ type: "MEET_STATUS", active: true });
 }
 
@@ -222,7 +225,7 @@ async function ensureOffscreenDocument() {
 
   await chrome.offscreen.createDocument({
     url: "offscreen.html",
-    reasons: ["MEDIA_RECORDER"],
+    reasons: ["USER_MEDIA"],
     justification:
       "Recording meeting audio from the active Google Meet tab for speech-to-text transcription.",
   });
@@ -598,8 +601,28 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // 10. Extension icon click → open side panel
 // ══════════════════════════════════════════════════════════
 
-chrome.action.onClicked.addListener((tab) => {
+chrome.action.onClicked.addListener(async (tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
+
+  // ── Tab Capture: only possible when the user clicks the icon
+  // on the Meet tab itself (Chrome only grants activeTab for the
+  // tab that was clicked). If they clicked from another tab,
+  // show a friendly hint — don't show a red error.
+  const clickedUrl = tab.url || tab.pendingUrl || "";
+  if (clickedUrl.includes(MEET_ORIGIN) && !tabCaptureActive) {
+    console.log("[MeetSense] Clicked on Meet tab — starting tab capture.");
+    activeMeetTabId = tab.id;
+    await startTabCapture(tab.id);
+  } else if (isMeetActive && !tabCaptureActive) {
+    // Meet is running in another tab — inform user but don't error
+    console.log("[MeetSense] Meet is in a different tab. Switch to it and click icon again to enable audio capture.");
+    broadcastToPanel({
+      type: "TAB_CAPTURE_STATUS",
+      active: false,
+      error: "Switch to your Meet tab and click this icon again to enable audio capture.",
+    });
+  }
+
   setTimeout(() => {
     broadcastToPanel({ type: "MEET_STATUS", active: isMeetActive });
     broadcastToPanel({

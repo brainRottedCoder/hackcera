@@ -19,21 +19,22 @@ const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY;
 
 class DeepgramManager {
   constructor(clientWs) {
-    this.clientWs  = clientWs;   // The browser-facing WebSocket
-    this.live       = null;       // Deepgram live connection
-    this.ready      = false;      // true once Deepgram socket is open
-    this.queue      = [];         // buffer audio before DG is ready
+    this.clientWs  = clientWs;
+    this.live       = null;
+    this.ready      = false;
+    this.queue      = [];
     this.destroyed  = false;
-
-    this._connect();
+    this._connected = false; // lazy: only connect when audio arrives
   }
 
-  // ── Open Deepgram live stream ──
+  // ── Open Deepgram live stream (called lazily on first audio chunk) ──
   _connect() {
     if (!DEEPGRAM_API_KEY) {
       console.warn("[Deepgram] No API key set — tab audio STT disabled.");
       return;
     }
+    if (this._connected || this.destroyed) return;
+    this._connected = true;
 
     const deepgram = createClient(DEEPGRAM_API_KEY);
 
@@ -42,9 +43,7 @@ class DeepgramManager {
       language:        "en-US",
       smart_format:    true,
       interim_results: true,
-      encoding:        "webm-opus",   // matches offscreen.js MediaRecorder
-      sample_rate:     48000,
-      channels:        1,
+      // No encoding/sample_rate — Deepgram auto-detects from WebM container
     });
 
     this.live.on(LiveTranscriptionEvents.Open, () => {
@@ -108,6 +107,12 @@ class DeepgramManager {
   // ── Send base64 audio buffer to Deepgram ──
   sendAudio(audioBase64) {
     if (this.destroyed) return;
+
+    // Lazy connect: open Deepgram only when real audio first arrives
+    if (!this._connected) {
+      console.log("[Deepgram] First audio chunk received — opening live connection.");
+      this._connect();
+    }
 
     let buffer;
     try {

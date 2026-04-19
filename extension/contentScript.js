@@ -15,8 +15,8 @@ const SpeechRecognition =
 let recognition = null;
 let isListening = false;
 let retryCount = 0;
-const MAX_RETRIES = 5;
-const RETRY_DELAY_MS = 3000;
+const MAX_RETRIES = 20;      // for non-network fatal errors
+const RETRY_DELAY_MS = 2000; // retry delay
 
 // ── Transcription State ──
 let sessionTranscript = [];
@@ -104,6 +104,7 @@ function initSpeechRecognition() {
 
     switch (event.error) {
       case "no-speech":
+        // Normal — silence detected, recognition will auto-restart via onend
         break;
 
       case "aborted":
@@ -119,15 +120,14 @@ function initSpeechRecognition() {
         return;
 
       case "network":
-        if (retryCount < MAX_RETRIES) {
-          retryCount++;
-          setTimeout(() => startListening(), RETRY_DELAY_MS);
-        }
+        // Network errors are always transient — reset counter and always retry
+        retryCount = 0;
         chrome.runtime.sendMessage({
           type: "SPEECH_STATUS",
           status: "error",
-          error: "Network error — transcription will retry.",
+          error: "Network glitch — retrying transcription…",
         });
+        setTimeout(() => startListening(), RETRY_DELAY_MS);
         return;
 
       default:
@@ -138,7 +138,7 @@ function initSpeechRecognition() {
         chrome.runtime.sendMessage({
           type: "SPEECH_STATUS",
           status: "error",
-          error: `Speech error: ${event.error}`,
+          error: `Speech error: ${event.error} — retrying…`,
         });
         return;
     }
@@ -146,13 +146,9 @@ function initSpeechRecognition() {
 
   recognition.onend = () => {
     isListening = false;
-    // Auto-restart: SpeechRecognition stops after silence,
-    // so we restart it to keep continuous transcription
-    if (retryCount < MAX_RETRIES) {
-      setTimeout(() => {
-        startListening();
-      }, 300);
-    }
+    // Always restart — SpeechRecognition stops after silence or short sessions.
+    // We keep it alive continuously for the full duration of the meeting.
+    setTimeout(() => startListening(), 300);
   };
 }
 

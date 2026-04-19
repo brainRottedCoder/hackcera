@@ -121,7 +121,6 @@ function appendTranscription(payload) {
   if (empty) empty.remove();
 
   if (isFinal) {
-    // Finalize any pending interim line
     if (currentInterimEl) {
       currentInterimEl.remove();
       currentInterimEl = null;
@@ -138,7 +137,6 @@ function appendTranscription(payload) {
     const lines = transcriptFeed.querySelectorAll(".transcript-line");
     if (lines.length > 150) lines[0].remove();
   } else {
-    // Interim — show live preview
     if (!currentInterimEl) {
       currentInterimEl = document.createElement("p");
       currentInterimEl.className = "transcript-line interim";
@@ -199,8 +197,7 @@ function updateTabCaptureBanner(active, error) {
 // ──────────────────────────────────────────
 function updateInsights({ tasks, decisions, risks }) {
   if (tasks?.length) updateTasks(tasks);
-  if (decisions?.length)
-    updateList(decisionsList, decisions, "decision-item");
+  if (decisions?.length) updateList(decisionsList, decisions, "decision-item");
   if (risks?.length) updateList(risksList, risks, "risk-item");
 }
 
@@ -216,10 +213,8 @@ function updateTasks(newTasks) {
         `[data-task="${CSS.escape(newTask.task)}"]`
       );
       if (row) {
-        row.querySelector(".cell-owner").textContent =
-          newTask.owner || "Unassigned";
-        row.querySelector(".cell-deadline").textContent =
-          newTask.deadline || "TBD";
+        row.querySelector(".cell-owner").textContent = newTask.owner || "Unassigned";
+        row.querySelector(".cell-deadline").textContent = newTask.deadline || "TBD";
       }
     }
   });
@@ -280,39 +275,25 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
       b.classList.remove("active");
       b.setAttribute("aria-selected", "false");
     });
-    document
-      .querySelectorAll(".tab-content")
-      .forEach((c) => c.classList.add("hidden"));
+    document.querySelectorAll(".tab-content").forEach((c) => c.classList.add("hidden"));
 
     btn.classList.add("active");
     btn.setAttribute("aria-selected", "true");
-    document
-      .getElementById(`tab-${btn.dataset.tab}`)
-      .classList.remove("hidden");
+    document.getElementById(`tab-${btn.dataset.tab}`).classList.remove("hidden");
   });
 });
 
-// Keyboard navigation for tabs
 document.querySelector(".tab-bar").addEventListener("keydown", (e) => {
   const tabs = [...document.querySelectorAll(".tab-btn")];
   const currentIndex = tabs.indexOf(document.activeElement);
   let newIndex;
 
   switch (e.key) {
-    case "ArrowRight":
-      newIndex = (currentIndex + 1) % tabs.length;
-      break;
-    case "ArrowLeft":
-      newIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-      break;
-    case "Home":
-      newIndex = 0;
-      break;
-    case "End":
-      newIndex = tabs.length - 1;
-      break;
-    default:
-      return;
+    case "ArrowRight": newIndex = (currentIndex + 1) % tabs.length; break;
+    case "ArrowLeft":  newIndex = (currentIndex - 1 + tabs.length) % tabs.length; break;
+    case "Home":       newIndex = 0; break;
+    case "End":        newIndex = tabs.length - 1; break;
+    default: return;
   }
 
   e.preventDefault();
@@ -331,22 +312,15 @@ btnSummary.addEventListener("click", () => {
 function setSummaryLoading(loading) {
   btnSummary.disabled = loading;
   btnSummaryLabel.textContent = loading ? "Generating…" : "Generate Summary";
-  document.getElementById("btn-summary-icon").textContent = loading
-    ? "⏳"
-    : "✨";
+  document.getElementById("btn-summary-icon").textContent = loading ? "⏳" : "✨";
 }
 
 function renderSummary({ summary, tasks, decisions, risks }) {
   lastSummary = { summary, tasks, decisions, risks };
 
-  document.getElementById("summary-text").textContent =
-    summary || "No summary available.";
+  document.getElementById("summary-text").textContent = summary || "No summary available.";
 
-  renderSummaryList(
-    "summary-tasks",
-    tasks,
-    (t) => `${t.task} → ${t.owner || "?"} by ${t.deadline || "TBD"}`
-  );
+  renderSummaryList("summary-tasks", tasks, (t) => `${t.task} → ${t.owner || "?"} by ${t.deadline || "TBD"}`);
   renderSummaryList("summary-decisions", decisions, (d) => d);
   renderSummaryList("summary-risks", risks, (r) => r);
 
@@ -374,7 +348,7 @@ function showSummaryError(message) {
 }
 
 // ──────────────────────────────────────────
-// 7. Export + Clear
+// 7. Export (JSON + Markdown) + Clear
 // ──────────────────────────────────────────
 btnCopy.addEventListener("click", () => {
   if (!lastSummary) return;
@@ -399,15 +373,12 @@ function summaryToMarkdown(data) {
   md += `${data.summary || ""}\n\n`;
   if (data.tasks?.length) {
     md += `## Tasks\n`;
-    data.tasks.forEach(
-      (t) =>
-        (md += `- [ ] **${t.task}** — ${t.owner || "Unassigned"} — ${t.deadline || "TBD"}\n`)
-    );
+    data.tasks.forEach((t) => (md += `- [ ] **${t.task}** — ${t.owner || "Unassigned"} — ${t.deadline || "TBD"}\n`));
     md += "\n";
   }
   if (data.decisions?.length) {
     md += `## Decisions\n`;
-    data.decisions.forEach((d) => (md += `- ${d}\n"));
+    data.decisions.forEach((d) => (md += `- ${d}\n`));
     md += "\n";
   }
   if (data.risks?.length) {
@@ -450,9 +421,7 @@ function showSaveToast() {
 }
 
 btnHistory.addEventListener("click", () => {
-  chrome.tabs.create({
-    url: chrome.runtime.getURL("history.html"),
-  });
+  chrome.tabs.create({ url: chrome.runtime.getURL("history.html") });
 });
 
 // ──────────────────────────────────────────
@@ -497,18 +466,13 @@ function showInsightsError(message) {
     banner.id = "insights-error-banner";
     banner.className = "error-banner";
     banner.setAttribute("role", "alert");
-    const section = document.querySelector(
-      '[aria-labelledby="insights-title"]'
-    );
+    const section = document.querySelector('[aria-labelledby="insights-title"]');
     if (section) section.insertBefore(banner, section.firstChild.nextSibling);
   }
   banner.textContent = `⚠️ ${message}`;
   banner.classList.remove("hidden");
   clearTimeout(insightsErrorTimer);
-  insightsErrorTimer = setTimeout(
-    () => banner.classList.add("hidden"),
-    10000
-  );
+  insightsErrorTimer = setTimeout(() => banner.classList.add("hidden"), 10000);
 }
 
 // ──────────────────────────────────────────
