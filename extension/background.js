@@ -4,7 +4,7 @@
 // Manages two transcription sources:
 //   TRACK A: Web Speech API transcription from contentScript
 //   TRACK B: Tab-captured audio chunks from offscreen doc
-//            → sent to backend for Whisper STT
+//            → sent to backend for Deepgram streaming STT
 //
 // Auto-saves meeting data to chrome.storage.local on session
 // end so users can browse past meetings in the History page.
@@ -23,6 +23,8 @@ let isMeetActive = false;
 let activeMeetTabId = null;
 let lastChunkSentIndex = 0;
 let offscreenDocActive = false;
+let offscreenReadyResolver = null;
+let offscreenReadyPromise = null;
 let tabCaptureActive = false;
 let sessionStartTime = null;
 let sessionInsights = { tasks: [], decisions: [], risks: [] };
@@ -178,6 +180,11 @@ async function clearAllHistory() {
 // ══════════════════════════════════════════════════════════
 
 async function startTabCapture(tabId) {
+  if (tabCaptureActive) {
+    console.log("[MeetSense] Tab capture already active — skipping.");
+    broadcastToPanel({ type: "TAB_CAPTURE_STATUS", active: true });
+    return;
+  }
   try {
     await ensureOffscreenDocument();
 
@@ -223,6 +230,10 @@ async function ensureOffscreenDocument() {
     return;
   }
 
+  offscreenReadyPromise = new Promise((resolve) => {
+    offscreenReadyResolver = resolve;
+  });
+
   await chrome.offscreen.createDocument({
     url: "offscreen.html",
     reasons: ["USER_MEDIA"],
@@ -230,8 +241,9 @@ async function ensureOffscreenDocument() {
       "Recording meeting audio from the active Google Meet tab for speech-to-text transcription.",
   });
 
+  await offscreenReadyPromise;
   offscreenDocActive = true;
-  console.log("[MeetSense] Offscreen document created.");
+  console.log("[MeetSense] Offscreen document created and ready.");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -462,6 +474,14 @@ chrome.runtime.onMessage.addListener((msg) => {
       }
       break;
 
+    case "OFFSCREEN_READY":
+      if (offscreenReadyResolver) {
+        offscreenReadyResolver();
+        offscreenReadyResolver = null;
+        offscreenReadyPromise = null;
+      }
+      break;
+
     // ── Pause-driven chunking ──
     // Fired by contentScript.js right when a speaker finishes a sentence.
     // Debounced so rapid consecutive isFinal events don't flood the backend.
@@ -564,6 +584,26 @@ chrome.runtime.onMessage.addListener((msg) => {
         active: tabCaptureActive,
       });
       break;
+
+    case "START_AUDIO_CAPTURE":
+      if (isMeetActive && activeMeetTabId && !tabCaptureActive) {
+        startTabCapture(activeMeetTabId);
+      } else if (!isMeetActive) {
+        broadcastToPanel({
+          type: "TAB_CAPTURE_STATUS",
+          active: false,
+          error: "No active Meet session.",
+        });
+      } else if (tabCaptureActive) {
+        broadcastToPanel({ type: "TAB_CAPTURE_STATUS", active: true });
+      } else {
+        broadcastToPanel({
+          type: "TAB_CAPTURE_STATUS",
+          active: false,
+          error: "Click the extension icon on your Meet tab to grant audio capture permission.",
+        });
+      }
+      break;
   }
 });
 
@@ -595,7 +635,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // ══════════════════════════════════════════════════════════
 
 chrome.action.onClicked.addListener(async (tab) => {
-  chrome.sidePanel.open({ windowId: tab.windowId });
+  chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
 
   // ── Tab Capture: only possible when the user clicks the icon
   // on the Meet tab itself (Chrome only grants activeTab for the

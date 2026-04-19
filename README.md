@@ -2,7 +2,7 @@
 
 > _A real-time intelligence layer that transforms live conversations into structured execution data — before the meeting even ends._
 
-✅ **Live Production Deployment Available**: https://hackcera.onrender.com
+✅ **Live Backend Production Deployment Available**: https://hackcera.onrender.com
 
 ---
 

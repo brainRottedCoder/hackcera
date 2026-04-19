@@ -119,7 +119,34 @@ async function callGeminiSummary(prompt) {
           config: {
             responseMimeType: "application/json",
             temperature: 0.2,
-            maxOutputTokens: 1000
+            maxOutputTokens: 2500,
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                summary: { type: "STRING" },
+                tasks: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      task: { type: "STRING" },
+                      owner: { type: "STRING" },
+                      deadline: { type: "STRING" }
+                    },
+                    required: ["task", "owner", "deadline"]
+                  }
+                },
+                decisions: {
+                  type: "ARRAY",
+                  items: { type: "STRING" }
+                },
+                risks: {
+                  type: "ARRAY",
+                  items: { type: "STRING" }
+                }
+              },
+              required: ["summary", "tasks", "decisions", "risks"]
+            }
           }
         });
 

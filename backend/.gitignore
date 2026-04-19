@@ -35,3 +35,6 @@ next-env.d.ts
 
 # Cache directory for project-health
 .ph-cache/
+
+
+video_script.md 

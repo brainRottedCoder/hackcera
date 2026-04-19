@@ -25,6 +25,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+chrome.runtime.sendMessage({ type: "OFFSCREEN_READY" });
+
 async function startCapture(streamId) {
   if (isRecording) {
     console.warn("[Offscreen] Already recording — ignoring START_TAB_CAPTURE.");

@@ -33,6 +33,7 @@ const speechBannerIcon = document.getElementById("speech-banner-icon");
 const speechBannerText = document.getElementById("speech-banner-text");
 const tabcaptureBanner = document.getElementById("tabcapture-banner");
 const tabcaptureBannerText = document.getElementById("tabcapture-banner-text");
+const btnStartCapture = document.getElementById("btn-start-capture");
 const micDeniedBanner = document.getElementById("mic-denied-banner");
 const speechApiBanner = document.getElementById("speech-api-banner");
 
@@ -184,13 +185,29 @@ function updateTabCaptureBanner(active, error) {
   if (active) {
     tabcaptureBanner.classList.remove("hidden");
     tabcaptureBannerText.textContent = "Tab audio captured for STT";
+    btnStartCapture.classList.add("hidden");
   } else if (error) {
     tabcaptureBanner.classList.remove("hidden");
     tabcaptureBannerText.textContent = `Tab capture: ${error}`;
+    btnStartCapture.classList.toggle("hidden", !meetActive);
+    btnStartCapture.textContent = "Start Audio Capture";
+    btnStartCapture.disabled = false;
+  } else if (meetActive) {
+    tabcaptureBanner.classList.remove("hidden");
+    tabcaptureBannerText.textContent = "Tab audio not captured";
+    btnStartCapture.classList.remove("hidden");
+    btnStartCapture.textContent = "Start Audio Capture";
+    btnStartCapture.disabled = false;
   } else {
     tabcaptureBanner.classList.add("hidden");
   }
 }
+
+btnStartCapture.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "START_AUDIO_CAPTURE" });
+  btnStartCapture.textContent = "Starting…";
+  btnStartCapture.disabled = true;
+});
 
 // ──────────────────────────────────────────
 // 4. AI Insights Update

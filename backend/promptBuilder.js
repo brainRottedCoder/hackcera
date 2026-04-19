@@ -44,34 +44,30 @@ Extract ONLY NEW items explicitly discussed in the transcript above:
 // ── TRACK C: Full meeting summary prompt ──
 // Heavier prompt — called once manually by user
 function buildSummaryPrompt(fullTranscript, allTasks = [], allDecisions = []) {
-  return `You are an expert AI meeting analyst. The user has just finished a meeting and wants a comprehensive summary.
+  return `You are an expert AI meeting analyst. The user has just finished a meeting and wants a comprehensive summary resulting in a strict JSON format.
 
 ## Full Meeting Transcript:
 ${fullTranscript}
 
-## Previously Auto-Extracted Items (include and verify these):
+## Previously Auto-Extracted Items (incorporate these):
 Tasks: ${JSON.stringify(allTasks)}
 Decisions: ${JSON.stringify(allDecisions)}
 
 ## Instructions:
-Generate a COMPLETE meeting summary with the following:
-1. "summary" — 3-5 sentence narrative summary of what the meeting covered and achieved.
-2. "tasks" — ALL tasks mentioned, each with "task", "owner" (or "Unassigned"), "deadline" (or "TBD").
-3. "decisions" — ALL decisions or commitments made (strings).
-4. "risks" — ALL blockers, concerns, or risks raised (strings).
+Generate a COMPLETE meeting summary with EXACTLY these four root keys. Do NOT change the key names:
+1. "summary" — 3-5 sentence narrative summary of what the meeting covered.
+2. "tasks" — Array of task objects. EACH object MUST have three exact keys: "task" (string), "owner" (string, DO NOT USE 'assignee'), "deadline" (string).
+3. "decisions" — Array of strings detailing commitments made.
+4. "risks" — Array of strings detailing blockers or risks raised.
 
-## RULES:
-- Be comprehensive — capture everything, not just the last few seconds.
-- Do NOT hallucinate tasks or decisions. Only extract what was explicitly discussed.
-- Return ONLY valid JSON. No markdown, no explanation, no code fences.
-
-## Required JSON format:
+## REQUIRED JSON SCHEMA EXACT MATCH (DO NOT DEVIATE):
 {
-  "summary": "...",
-  "tasks": [{"task":"...","owner":"...","deadline":"..."}],
+  "summary": "Full narrative text here...",
+  "tasks": [{"task": "...", "owner": "...", "deadline": "..."}],
   "decisions": ["..."],
   "risks": ["..."]
-}`;
+}
+`;
 }
 
 module.exports = { buildInsightsPrompt, buildSummaryPrompt };
