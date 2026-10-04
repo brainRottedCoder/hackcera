@@ -2,6 +2,7 @@
   "name": "meetsense-backend",
   "version": "1.0.0",
   "description": "MeetSense AI backend — WebSocket server + Gemini LLM orchestration",
+  "license": "MIT",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
